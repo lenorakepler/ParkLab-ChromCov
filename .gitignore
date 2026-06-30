@@ -1,6 +1,15 @@
+# SETUP
+data/
+out/
+
+# MAC
+.DS_Store
+*/.DS_Store
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
+*.py[oc]
 *$py.class
 
 # C extensions
