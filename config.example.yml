@@ -12,12 +12,7 @@ inputs:
   reference: data/GCA_000001405.15_GRCh38_no_alt_analysis_set.fa
   index: null # default: <cram>.crai
 
-# --- backend selection -------------------------------------------------------
-backend:
-  name: native # native (hand-rolled pysam) | mosdepth (subprocess on PATH)
-  threads: 4 # mosdepth --threads; native is single-threaded
-
-# --- read filtering (shared by both backends; samtools/mosdepth semantics) ---
+# --- read filtering (samtools flag/MAPQ semantics) ---------------------------
 filters:
   min_mapping_quality: 0 # -Q
   include_flags: [] # -f: require ALL (names or int mask)

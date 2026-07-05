@@ -257,7 +257,7 @@ class CoverageAnalysis:
         """The plain per-chromosome coverage table (the `coverage` deliverable),
         derived from the same pass -- this is what makes `analyze` a superset."""
         return [
-            ChromCoverage(chrom=c, length=self.lengths[c], bases=self.bases[c], backend="native")
+            ChromCoverage(chrom=c, length=self.lengths[c], bases=self.bases[c])
             for c in self.chroms
         ]
 

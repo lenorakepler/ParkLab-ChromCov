@@ -42,7 +42,7 @@ def _resolve(p: str | None) -> Path | None:
 # overrides" rule, and it lives only here.
 
 def _coverage_overrides(*, cram=None, reference=None, index=None, min_mapq=None,
-                        backend=None, chroms=None, per_base=False) -> dict:
+                        chroms=None, per_base=False) -> dict:
     ov: dict = {}
     if cram:
         ov["cram"] = str(_resolve(cram))
@@ -50,8 +50,6 @@ def _coverage_overrides(*, cram=None, reference=None, index=None, min_mapq=None,
         ov["reference"] = str(_resolve(reference))
     if index:
         ov["index"] = str(_resolve(index))
-    if backend:
-        ov["backend"] = backend
     if min_mapq is not None:
         ov["min_mapping_quality"] = min_mapq
     if chroms:
@@ -114,7 +112,6 @@ def main() -> None:
 
 @main.command()
 @input_options
-@click.option("--backend", type=click.Choice(["native", "mosdepth"]), default=None)
 @click.option("--chroms", default=None, help="comma-separated contig subset (default: all)")
 @click.option("--output", type=click.Path(dir_okay=False), default=None,
               help="write the table to FILE (default: stdout)")
@@ -122,12 +119,11 @@ def main() -> None:
 @click.option("--runs-dir", "runs_dir", type=click.Path(file_okay=False), default=None,
               help="archive directory (default: ./runs)")
 @click.option("--run-name", "run_name", type=click.Choice(["slug", "hash"]), default="slug")
-def coverage(cram, reference, index, min_mapq, config, backend, chroms,
+def coverage(cram, reference, index, min_mapq, config, chroms,
              output, write, runs_dir, run_name) -> None:
     """Per-chromosome mean coverage table (the deliverable)."""
     run = _load_run(config, coverage=_coverage_overrides(
-        cram=cram, reference=reference, index=index, min_mapq=min_mapq,
-        backend=backend, chroms=chroms))
+        cram=cram, reference=reference, index=index, min_mapq=min_mapq, chroms=chroms))
     cfg = run.coverage
     rows = dispatch.run_coverage(cfg)
 
@@ -257,8 +253,8 @@ def collate(runs_dir) -> None:
     click.echo("\n# run_id -> params")
     seen: dict = {}
     for r in long_rows:
-        seen.setdefault(r["run_id"], {k: r[k] for k in ("backend", "min_mapping_quality",
-                                                         "exclude_flags") if k in r})
+        seen.setdefault(r["run_id"], {k: r[k] for k in ("min_mapping_quality",
+                                                        "exclude_flags") if k in r})
     for rid, params in seen.items():
         click.echo(f"# {rid}: {params}")
 

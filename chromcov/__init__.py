@@ -2,15 +2,16 @@
 chromcov — per-chromosome average coverage from a CRAM.
 
 Public API:
-  CoverageConfig / AnalysisConfig  configuration (Pydantic, validated at the boundary)
-  run_coverage(config)             dispatch to a backend -> list[ChromCoverage]
-  CoverageBackend / get_backend    the backend ABC + registry
+  CoverageConfig / AnalysisConfig / RunConfig   configuration (Pydantic, validated)
+  run_coverage(config)             per-chromosome coverage -> list[ChromCoverage]
   ChromCoverage                    one normalized per-chromosome row
   CoverageAnalysis                 the full QC pipeline (stats/windows/strata/plots)
-  ChromDepth / Strata / RunStore   the reduction, callability, and archival classes
+  ChromDepth / Strata              the reduction + callability classes
+  PerBaseStore / RunStore          per-base track store + coverage-table archive
+
+(mosdepth is an optional cross-check add-on: scripts/mosdepth_coverage.py.)
 """
 from .analysis import ChromDepth, ChromStats
-from .backends import CoverageBackend, MosdepthBackend, NativeBackend, get_backend
 from .config import AnalysisConfig, CoverageConfig, RunConfig
 from .dispatch import run_coverage
 from .output import RunStore
@@ -25,10 +26,6 @@ __all__ = [
     "AnalysisConfig",
     "RunConfig",
     "run_coverage",
-    "CoverageBackend",
-    "NativeBackend",
-    "MosdepthBackend",
-    "get_backend",
     "ChromCoverage",
     "CoverageAnalysis",
     "ChromDepth",

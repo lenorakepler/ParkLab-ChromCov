@@ -58,28 +58,27 @@ normality), and **robust CV = MAD/median** alongside the classical ones. The
 "non-uniform coverage" alarm. MAD is computed as a weighted median of folded
 deviations, straight from the histogram.
 
-## 4. Two backends, one config
+## 4. One calculator, mosdepth as an optional cross-check
 
-`CoverageConfig` is the single source of truth; `dispatch.run_coverage` picks a
-backend from the registry — `NativeBackend` (hand-rolled pysam) or
-`MosdepthBackend` (subprocess on PATH), both subclasses of the `CoverageBackend`
-ABC in `backends.py`. Both emit `list[ChromCoverage]`, so downstream code is
-backend-agnostic and "run both, diff the means" is a real cross-check
-(`tests/test_backends.py`).
+There is a single in-tool calculator: the native `calc_cov` (`dispatch.run_coverage`).
+mosdepth is **not** a second backend baked into the dispatch path — it's an
+optional add-on, `scripts/mosdepth_coverage.py`, that runs the `mosdepth` binary
+and converts its output into chromcov's `coverage.tsv` format. So validation is
+an explicit, opt-in `diff` (`tests/test_mosdepth_compare.py`) rather than a
+registry/ABC/subprocess seam the core has to carry. It also keeps the deliverable
+path dependency-light (no `mosdepth` needed to run chromcov).
 
-Getting parity right required reconciling **default flag masks**: the hand-rolled
-default excluded unmapped|secondary|dup|**supplementary** (3332); mosdepth's
-default excludes unmapped|secondary|**qcfail**|dup (1796). `config.py` pins the
-explicit union so the two agree out of the box. `MosdepthBackend` **raises** on knobs
-it can't honor (`-G` exclude-all, multi-contig subsets) rather than silently
-diverging — silent divergence is the worst outcome when the whole point is
-mutual validation.
+Getting parity right still required reconciling **default flag masks**: the
+hand-rolled default excluded unmapped|secondary|dup|**supplementary** (3332);
+mosdepth's default excludes unmapped|secondary|**qcfail**|dup (1796). `config.py`
+pins the explicit union (3844) as `DEFAULT_EXCLUDE`, and the add-on defaults to
+that same mask, so the two agree out of the box. mosdepth has no `-G`
+(exclude-all-flags) equivalent, so the add-on simply doesn't offer that knob.
 
-`mosdepth` is called as a **subprocess on PATH**, never via `docker run` from
-Python. Containerization belongs at the environment boundary (the CWL/Docker image
-that wraps the whole tool), not nested inside it — nested containers mean
-docker-in-docker on AWS/HPC and host↔container path translation. See the
-reproducibility sketch.
+The add-on shells out to `mosdepth` on PATH, never via `docker run` from Python:
+containerization belongs at the environment boundary (the CWL/Docker image that
+wraps the whole tool), not nested inside it — nested containers mean
+docker-in-docker on AWS/HPC and host↔container path translation.
 
 ## 5. Callability stratification
 

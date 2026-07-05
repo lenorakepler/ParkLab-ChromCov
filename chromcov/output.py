@@ -28,7 +28,6 @@ from .result import ChromCoverage
 # The config fields that DEFINE a run (i.e. change these -> a different output).
 # Inputs are folded into the hash separately via their file identity.
 RUN_PARAM_FIELDS = (
-    "backend",
     "min_mapping_quality",
     "include_flags",
     "exclude_flags",
@@ -94,14 +93,14 @@ class RunStore:
         return hashlib.sha256(blob).hexdigest()[:length]
 
     def run_slug(self, config: CoverageConfig) -> str:
-        """Human-scannable name: backend + only params that DIFFER from default,
-        then the run_key hash as a suffix.
+        """Human-scannable name: only params that DIFFER from default, then the
+        run_key hash as a suffix.
 
         The slug is friendly but lossy (hides defaults and input identity); the
         hash suffix keeps the name unique + idempotent. Samtools-style letters
         (q/f/F/G) mirror the CLI flags; masks in hex.
         """
-        parts = [config.backend]
+        parts = []
         if config.min_mapping_quality:
             parts.append(f"q{config.min_mapping_quality}")
         if config.exclude_flags != DEFAULT_EXCLUDE:
@@ -110,7 +109,8 @@ class RunStore:
             parts.append(f"f{config.include_flags:#x}")
         if config.exclude_all_flags:
             parts.append(f"G{config.exclude_all_flags:#x}")
-        return "-".join(parts) + "-" + self.run_key(config)
+        stem = "-".join(parts) if parts else "cov"
+        return stem + "-" + self.run_key(config)
 
     def run_dirname(self, config: CoverageConfig, style: str = "slug") -> str:
         """Directory name for a run. 'slug' = readable + hash; 'hash' = bare digest."""

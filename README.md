@@ -35,7 +35,7 @@ Full table + all chromosomes: `out/coverage.stats.tsv`.
 #    COLO829T_TEST.cram(.crai) + GCA_000001405.15_GRCh38_no_alt_analysis_set.fa(.fai)
 uv sync                         # installs the package + the `chromcov` CLI
 
-# 2. per-chromosome coverage table (the deliverable; native backend, no container)
+# 2. per-chromosome coverage table (the deliverable; no container needed)
 chromcov coverage --cram data/COLO829T_TEST.cram \
   --reference data/GCA_000001405.15_GRCh38_no_alt_analysis_set.fa
 
@@ -49,8 +49,9 @@ chromcov analyze --cram data/COLO829T_TEST.cram \
 ```
 
 `chromcov coverage --write` archives each run under `runs/<name>/` with a
-provenance sidecar; `chromcov collate` compares them. The mosdepth cross-check
-backend (`--backend mosdepth`) needs the binary on PATH.
+provenance sidecar; `chromcov collate` compares them. An optional mosdepth
+cross-check (`scripts/mosdepth_coverage.py`) emits the same `coverage.tsv` format
+for validation — it needs the `mosdepth` binary on PATH, but chromcov itself does not.
 
 ## Compute once, analyze many (per-base tracks + reuse)
 
@@ -94,7 +95,7 @@ finite-difference algorithm that costs O(reads), not O(bases).
 
 **Extensions (what a production QC pipeline wants):**
 - **Robust stats** — median, scaled MAD, robust CV (MAD/median), IQR, breadth-at-depth. Robust measures matter because multi-mapping pileups make plain sd/mean useless (chr21: sd 71 vs MAD 7).
-- **Two interchangeable backends** — a hand-rolled `pysam` calculator and `mosdepth`, behind one config, so each validates the other.
+- **Optional mosdepth cross-check** — a standalone add-on (`scripts/mosdepth_coverage.py`) runs `mosdepth` and converts its output to the same `coverage.tsv` format, so validation is an explicit `diff` rather than a second backend in the core.
 - **Callability stratification** — coverage within Park Lab's SMaHT easy/difficult/extreme region tiers; the "easy" coverage is the variant-callable number worth reporting.
 - **Approximate copy number** — depth normalized to the callability-masked autosomal median; windowed CN scatter reveals intrachromosomal breakpoints.
 - **Abnormality flags** — aneuploidy-aware CN gain/loss/depletion, low-depth, uneven, low-callability, extreme-depth.
@@ -105,9 +106,9 @@ finite-difference algorithm that costs O(reads), not O(bases).
 ```
 CoverageConfig ──► preflight (validate.py)   sorted? indexed? reference matches?
        │
-       ├──► dispatch.run_coverage ──► NativeBackend  ─┐  both emit
-       │                          └► MosdepthBackend ─┴► list[ChromCoverage]
-       │                                                  └► RunStore (run dir + provenance)
+       ├──► dispatch.run_coverage ──► calc_cov ──► list[ChromCoverage]
+       │                                             └► RunStore (run dir + provenance)
+       │        (optional cross-check: scripts/mosdepth_coverage.py, same format)
        │
        └──► CoverageAnalysis (native per-base, one memory-bounded pass per chrom):
                  calc_cov(per_base=True) ──► ChromDepth(per-base depth vector)
@@ -122,7 +123,8 @@ CoverageConfig ──► preflight (validate.py)   sorted? indexed? reference ma
 
 | Path | What |
 |---|---|
-| `chromcov/` | the installable package (config, backends, analysis, per-base tracks, CLI) |
+| `chromcov/` | the installable package (config, coverage, analysis, per-base tracks, CLI) |
+| `scripts/mosdepth_coverage.py` | optional mosdepth cross-check add-on (same output format) |
 | `tests/` | unit tests (reduction/QC math, track round-trip) + native↔mosdepth cross-check |
 | `WORKFLOW.md` | mermaid diagrams of the three-level workflow + orchestration layers |
 | `workflow/Snakefile`, `config/` | Snakemake orchestration layer + example config |

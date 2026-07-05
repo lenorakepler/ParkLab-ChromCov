@@ -1,22 +1,16 @@
 """
-Shared coverage configuration (Pydantic v2).
-
-The whole point of the dispatcher is that BOTH backends (the hand-rolled pysam
-calculator and mosdepth) consume this one object. Anything backend-specific
-lives behind the backend boundary, not here. Where a knob can't be honored by a
-backend, that backend should raise -- silent divergence between backends is the
-worst outcome, since the main reason to have both is cross-validation.
+Coverage configuration (Pydantic v2).
 
 Config is the trust boundary: `CoverageConfig` and `AnalysisConfig` are Pydantic
 models so a run driven by a YAML file or CLI args is *validated* (str->Path
-coercion, flag-name-list -> int-mask normalization, unknown-backend rejection)
-with actionable errors, instead of failing deep in the fetch loop. The computed
-value objects (`ChromCoverage`, `ChromStats`) stay plain dataclasses -- they're
-internal results, not parsed input.
+coercion, flag-name-list -> int-mask normalization) with actionable errors,
+instead of failing deep in the fetch loop. The computed value objects
+(`ChromCoverage`, `ChromStats`) stay plain dataclasses -- they're internal
+results, not parsed input.
 
-Flag masks mirror samtools/mosdepth integer semantics. Note the default-mask
-mismatch between tools, spelled out below: we pin an explicit shared default so
-the two backends actually agree out of the box.
+Flag masks mirror samtools/mosdepth integer semantics. `DEFAULT_EXCLUDE` pins an
+explicit mask (see below) so the numbers are reproducible and so the optional
+mosdepth cross-check add-on (scripts/mosdepth_coverage.py) agrees out of the box.
 """
 from __future__ import annotations
 
@@ -43,13 +37,13 @@ SAM_FLAGS = {
     "supplementary": 0x800,
 }
 
-# Explicit shared default = unmapped | secondary | qcfail | duplicate | supplementary.
-# This is deliberately the UNION of the two tools' native defaults so neither
-# backend is silently doing something different:
+# Explicit default = unmapped | secondary | qcfail | duplicate | supplementary.
+# This is deliberately the UNION of two tools' native defaults, so a cross-check
+# doesn't silently differ:
 #   - read_filter.py default   = unmapped|secondary|duplicate|supplementary  (3332)
 #   - mosdepth --flag default   = unmapped|secondary|qcfail|duplicate        (1796)
-# Pinning it here (3844) removes that footgun; override per-run if you want to
-# reproduce a specific tool's out-of-the-box number.
+# Pinning it here (3844) removes that footgun; override per-run to reproduce a
+# specific tool's out-of-the-box number.
 DEFAULT_EXCLUDE = (
     SAM_FLAGS["unmapped"]
     | SAM_FLAGS["secondary"]
@@ -86,20 +80,16 @@ def to_mask(flags) -> int:
 
 
 class CoverageConfig(BaseModel):
-    """The knobs both backends share. Validated at construction (CLI/YAML boundary)."""
+    """The coverage knobs. Validated at construction (CLI/YAML boundary)."""
 
     model_config = ConfigDict(extra="forbid")
 
-    # --- inputs (shared) ---
+    # --- inputs ---
     cram: Path
     reference: Path
     index: Path | None = None            # defaults to <cram>.crai if None
 
-    # --- backend selection ---
-    backend: Literal["native", "mosdepth"] = "native"
-
-    # Optional explicit contig subset (None = all). native loops only these;
-    # mosdepth would need a --chrom (single) or a BED to match.
+    # Optional explicit contig subset (None = all).
     chroms: tuple[str, ...] | None = None
 
     # Glob include/exclude over reference names, applied when `chroms` is None.
@@ -107,16 +97,13 @@ class CoverageConfig(BaseModel):
     include_contigs: tuple[str, ...] = DEFAULT_INCLUDE_CONTIGS
     exclude_contigs: tuple[str, ...] = DEFAULT_EXCLUDE_CONTIGS
 
-    # --- read filtering (shared knobs; samtools/mosdepth semantics) ---
-    min_mapping_quality: int = 0         # native -Q  /  mosdepth --mapq
-    include_flags: int = 0               # native -f  /  mosdepth --include-flag
-    exclude_flags: int = DEFAULT_EXCLUDE  # native -F  /  mosdepth --flag
-    exclude_all_flags: int = 0           # native -G  /  mosdepth: NO EQUIVALENT (backend raises)
+    # --- read filtering (samtools semantics: -Q/-f/-F/-G) ---
+    min_mapping_quality: int = 0
+    include_flags: int = 0               # -f: require ALL these bits
+    exclude_flags: int = DEFAULT_EXCLUDE  # -F: exclude if ANY set
+    exclude_all_flags: int = 0           # -G: exclude only if ALL set
 
-    # --- outputs / execution ---
-    per_base: bool = False               # keep full per-base depth vector (native) /
-                                         #   drop mosdepth --no-per-base when True
-    threads: int = 1                     # mosdepth --threads; native is single-threaded
+    per_base: bool = False               # keep the full per-base depth vector
 
     @field_validator("include_flags", "exclude_flags", "exclude_all_flags", mode="before")
     @classmethod
@@ -142,20 +129,17 @@ class CoverageConfig(BaseModel):
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "CoverageConfig":
-        """Build a CoverageConfig from the inputs/backend/filters/contigs sections
-        of a run-config YAML (see config.example.yml). Pipeline-level sections
+        """Build a CoverageConfig from the inputs/filters/contigs sections of a
+        run-config YAML (see config.example.yml). Pipeline-level sections
         (analysis/copy_number/strata/output) are consumed by AnalysisConfig."""
         data = yaml.safe_load(Path(path).read_text()) or {}
         inputs = data.get("inputs", {}) or {}
-        backend = data.get("backend", {}) or {}
         filters = data.get("filters", {}) or {}
         contigs = data.get("contigs", {}) or {}
         payload = {
             "cram": inputs.get("cram"),
             "reference": inputs.get("reference"),
             "index": inputs.get("index"),
-            "backend": backend.get("name", "native"),
-            "threads": backend.get("threads", 1),
             "min_mapping_quality": filters.get("min_mapping_quality", 0),
             "include_flags": filters.get("include_flags", 0),
             "exclude_flags": filters.get("exclude_flags", DEFAULT_EXCLUDE),
