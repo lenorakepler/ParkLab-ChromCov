@@ -136,7 +136,7 @@ self-describing and re-runnable from the sidecar alone.
 
 ## 9. Testing approach
 
-`tests/test_backends.py` cross-validates native vs mosdepth on one contig (skips
+`tests/test_mosdepth_compare.py` cross-validates native vs the mosdepth add-on on one contig (skips
 when mosdepth/data are absent). `tests/test_analysis.py` unit-tests the reduction
 math directly on hand-built depth vectors — `ChromDepth` histogram/stats
 (incl. the lower-quantile convention)/windowing/RLE, `Strata.mask` (overlap +

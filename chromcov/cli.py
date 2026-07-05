@@ -1,17 +1,19 @@
 """
 chromcov command-line interface (Click).
 
-    chromcov coverage  --cram ... --reference ...      # fast per-chromosome mean (the deliverable)
-    chromcov analyze   --cram ... --reference ...      # full QC suite (superset of coverage)
-    chromcov collate                                   # compare archived runs
+    chromcov coverage --cram ... --reference ...          # full run (per-base + stats + plots)
+    chromcov coverage --cram ... --reference ... --fast   # mean-only table (the quick deliverable)
+    chromcov perbase  --cram ... --chrom chrN             # one per-base track (Snakemake scatter)
+    chromcov collate                                      # compare archived runs
+    chromcov fetch strata                                 # download the SMaHT strata BEDs
 
 Path handling follows dev/output-location-conventions.md: inputs are resolved
-absolutely (expanduser().resolve()); the coverage table defaults to stdout so it
-is pipeable, or `--output FILE`; analysis outputs go under `--outdir` (default
-./out). Nothing is written to the install directory.
+absolutely (expanduser().resolve()); outputs go under `--outdir` (default ./out)
+by default, or the table to `--output FILE` ('-' for stdout). Nothing is written
+to the install directory.
 
-`coverage` is what the CWL tool (dev/reproducibility-sketch/coverage.cwl) calls
-as `baseCommand: [chromcov, coverage]` with `--cram --reference --min-mapq
+`coverage --fast` is what the CWL tool (dev/reproducibility-sketch/coverage.cwl)
+calls for the mean-only deliverable, with `--cram --reference --min-mapq
 --output`, so those options are kept stable.
 """
 from __future__ import annotations
@@ -271,7 +273,7 @@ def fetch_group() -> None:
 def fetch_strata_cmd(dest, force) -> None:
     """Download the Park Lab SMaHT easy/difficult/extreme hg38 BEDs."""
     paths = fetch.fetch_strata(dest, force=force)
-    click.echo("\nuse them with:\n  chromcov analyze ... --strata " + fetch.strata_arg(paths))
+    click.echo("\nuse them with:\n  chromcov coverage ... --strata " + fetch.strata_arg(paths))
 
 
 if __name__ == "__main__":

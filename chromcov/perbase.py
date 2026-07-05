@@ -9,7 +9,7 @@ Each chromosome's per-base depth is stored as a standard `.per-base.bedgraph.gz`
     <root>/<coverage-key>/coverage.json      # provenance + filter params + per-chrom summary
 
 so any genome tool (bedtools, IGV/UCSC after bigWig conversion, ...) can consume
-them, and a later `chromcov analyze` can re-derive stats/windows/strata/plots
+them, and a later `chromcov coverage` can re-derive stats/windows/strata/plots
 *without touching the CRAM again*. The directory is keyed by input identity +
 read-filter params, so different filters never collide, and it is populated
 per-chromosome (incremental: a later run adds only the chromosomes it needs).
