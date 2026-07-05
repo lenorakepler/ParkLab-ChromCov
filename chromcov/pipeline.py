@@ -25,10 +25,9 @@ from . import plots, qc, validate
 from .analysis import (
     ChromDepth,
     ChromStats,
+    DepthHistogram,
     copy_number,
     is_autosome,
-    quantile_from_hist,
-    stats_from_hist,
 )
 from .config import AnalysisConfig, CoverageConfig
 from .read_filter import ReadFilter, calc_cov
@@ -60,10 +59,10 @@ class CoverageAnalysis:
         self.lengths: dict[str, int] = {}
         self.bases: dict[str, int] = {}          # total aligned bases (for the coverage table)
         self.win_rows: list[dict] = []
-        self.autosomal_hist: np.ndarray | None = None
-        self.strata_hist: dict[str, np.ndarray] = {}
+        self.autosomal_hist: DepthHistogram | None = None
+        self.strata_hist: dict[str, DepthHistogram] = {}
         self.strata_bp: dict[str, int] = {label: 0 for label in self.strata.labels()}
-        self.easy_autosomal_hist: np.ndarray | None = None
+        self.easy_autosomal_hist: DepthHistogram | None = None
 
         # --- per-base track reuse bookkeeping ---
         self.track_hits: list[str] = []      # chroms read back from stored tracks
@@ -161,10 +160,11 @@ class CoverageAnalysis:
             total_depth = int(total_depth)
             self.track_misses.append(chrom)
 
-        depth = ChromDepth(base_depth, cap=self.acfg.hist_cap)
+        depth = ChromDepth(base_depth, cap=self.acfg.hist_cap,
+                           breadth_thresholds=self.acfg.breadth_thresholds)
 
         hist = depth.histogram()
-        self.per_chrom_stats[chrom] = stats_from_hist(hist, self.acfg.breadth_thresholds)
+        self.per_chrom_stats[chrom] = hist.stats()
         self.lengths[chrom] = length
         self.bases[chrom] = int(total_depth)
 
@@ -213,9 +213,9 @@ class CoverageAnalysis:
 
         val, src = 0.0, ""
         if self.acfg.baseline == "easy-autosomal-median" and self.easy_autosomal_hist is not None:
-            val, src = quantile_from_hist(self.easy_autosomal_hist, 0.5), "easy-autosomal median"
+            val, src = self.easy_autosomal_hist.quantile(0.5), "easy-autosomal median"
         if not val and self.autosomal_hist is not None:
-            val, src = quantile_from_hist(self.autosomal_hist, 0.5), "autosomal median"
+            val, src = self.autosomal_hist.quantile(0.5), "autosomal median"
         if not val:
             total_len = sum(self.lengths.values()) or 1
             val = sum(self.per_chrom_stats[c].mean * self.lengths[c] for c in self.chroms) / total_len or 1.0
@@ -325,7 +325,7 @@ class CoverageAnalysis:
             w = csv.DictWriter(fh, fieldnames=STRATA_COLUMNS, delimiter="\t")
             w.writeheader()
             for label in order:
-                s = stats_from_hist(self.strata_hist[label], self.acfg.breadth_thresholds)
+                s = self.strata_hist[label].stats()
                 w.writerow({
                     "stratum": label, "region_bp": self.strata_bp[label],
                     "pct_of_analyzed": round(100 * self.strata_bp[label] / total_bp, 2),

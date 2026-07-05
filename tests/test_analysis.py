@@ -11,6 +11,7 @@ from chromcov import qc
 from chromcov.analysis import (
     ChromDepth,
     ChromStats,
+    DepthHistogram,
     copy_number,
     is_autosome,
 )
@@ -20,7 +21,7 @@ from chromcov.strata import Strata
 def test_histogram_counts_and_stats():
     d = np.array([0, 0, 1, 2, 2, 3], dtype=np.int32)
     cd = ChromDepth(d, cap=10)
-    h = cd.histogram()
+    h = cd.histogram().counts
     assert (h[0], h[1], h[2], h[3]) == (2, 1, 2, 1)
 
     s = cd.stats()
@@ -33,6 +34,18 @@ def test_histogram_counts_and_stats():
     assert s.iqr == 2.0
     # breadth = fraction of positions at depth >= threshold.
     assert s.breadth[1] == 4 / 6
+
+
+def test_depthhistogram_pools_across_chromosomes():
+    a = ChromDepth(np.array([2, 2, 2], dtype=np.int32), cap=10).histogram()
+    b = ChromDepth(np.array([2, 4], dtype=np.int32), cap=10).histogram()
+    pooled = a + b
+    assert pooled.n == 5
+    assert pooled.counts[2] == 4 and pooled.counts[4] == 1
+    assert pooled.stats().mean == (2 + 2 + 2 + 2 + 4) / 5
+    # sum() works via __radd__ (0 + hist), for accumulating a genome-wide histogram
+    assert isinstance(sum([a, b]), DepthHistogram)
+    assert sum([a, b]).n == 5
 
 
 def test_windowed_means():
@@ -60,7 +73,7 @@ def test_rle_intervals():
 def test_masked_reduces_to_subset():
     cd = ChromDepth(np.array([1, 1, 5, 5], dtype=np.int32), cap=10)
     mask = np.array([True, True, False, False])
-    hm = cd.masked(mask).histogram()
+    hm = cd.masked(mask).histogram().counts
     assert hm[1] == 2 and hm[5] == 0
 
 

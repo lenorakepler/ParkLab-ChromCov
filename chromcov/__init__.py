@@ -11,7 +11,7 @@ Public API:
 
 (mosdepth is an optional cross-check add-on: scripts/mosdepth_coverage.py.)
 """
-from .analysis import ChromDepth, ChromStats
+from .analysis import ChromDepth, ChromStats, DepthHistogram
 from .config import AnalysisConfig, CoverageConfig, RunConfig
 from .dispatch import run_coverage
 from .output import RunStore
@@ -30,6 +30,7 @@ __all__ = [
     "CoverageAnalysis",
     "ChromDepth",
     "ChromStats",
+    "DepthHistogram",
     "Strata",
     "RunStore",
     "PerBaseStore",
