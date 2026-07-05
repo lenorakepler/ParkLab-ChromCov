@@ -11,6 +11,21 @@ Flag masks mirror samtools/mosdepth integer semantics. Note the default-mask
 mismatch between tools, spelled out below: we pin an explicit shared default so
 the two backends actually agree out of the box.
 """
+
+"""
+mosdepth_config:
+  include_contigs:
+    - "chr*"
+  exclude_contigs:
+    - "*_alt"
+    - "*_decoy"
+    - "*_random"
+    - "chrUn*"
+    - "HLA*"
+    - "chrM"
+    - "chrEBV"
+"""
+
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -68,9 +83,14 @@ class CoverageConfig:
     # --- backend selection ---
     backend: str = "native"              # "native" | "mosdepth"
 
-    # Optional contig subset (None = all). native loops only these; mosdepth would
-    # need a --chrom (single) or a BED to match -- left to the backend to honor.
+    # Optional explicit contig subset (None = all). native loops only these;
+    # mosdepth would need a --chrom (single) or a BED to match.
     chroms: tuple[str, ...] | None = None
+
+    # Glob include/exclude over reference names, applied when `chroms` is None.
+    # Keeps decoy/unplaced artifact contigs out of the headline report.
+    include_contigs: tuple[str, ...] = ("chr*",)
+    exclude_contigs: tuple[str, ...] = ("*_alt", "*_random", "chrUn*", "*_decoy", "HLA*", "chrEBV")
 
     # --- read filtering (shared knobs) ---
     min_mapping_quality: int = 0         # native -Q  /  mosdepth --mapq
@@ -90,3 +110,14 @@ class CoverageConfig:
         self.include_flags = to_mask(self.include_flags)
         self.exclude_flags = to_mask(self.exclude_flags)
         self.exclude_all_flags = to_mask(self.exclude_all_flags)
+
+    def select_contigs(self, references) -> list[str]:
+        """Resolve which contigs to process: explicit `chroms` wins, else apply
+        include-then-exclude globs over the CRAM's reference names."""
+        import fnmatch
+        if self.chroms is not None:
+            return list(self.chroms)
+        kept = [r for r in references
+                if any(fnmatch.fnmatch(r, p) for p in self.include_contigs)]
+        return [r for r in kept
+                if not any(fnmatch.fnmatch(r, p) for p in self.exclude_contigs)]

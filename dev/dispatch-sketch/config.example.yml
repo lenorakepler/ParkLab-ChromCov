@@ -1,0 +1,68 @@
+# chromcov configuration (sketch)
+# -----------------------------------------------------------------------------
+# One file that drives a whole coverage run, so a run is reproducible from a
+# single artifact (this file is also what the provenance sidecar records). YAML
+# to match the CWL/pipeline world; a loader maps each section onto the dataclass
+# it configures. Every key shown is the default unless noted -- delete what you
+# don't override.
+
+# --- inputs ------------------------------------------------------------------
+inputs:
+  cram: data/COLO829T_TEST.cram
+  reference: data/GCA_000001405.15_GRCh38_no_alt_analysis_set.fa
+  index: null            # default: <cram>.crai
+
+# --- backend selection -------------------------------------------------------
+backend:
+  name: native           # native (hand-rolled pysam) | mosdepth (subprocess on PATH)
+  threads: 4             # mosdepth --threads; native is single-threaded
+
+# --- read filtering (shared by both backends; samtools/mosdepth semantics) ---
+filters:
+  min_mapping_quality: 0            # -Q
+  include_flags: []                 # -f: require ALL (names or int mask)
+  exclude_flags:                    # -F: exclude if ANY set. Pinned union of both
+    - unmapped                      #     tools' defaults so native & mosdepth agree.
+    - secondary
+    - qcfail
+    - duplicate
+    - supplementary
+  exclude_all_flags: []             # -G: exclude only if ALL set (mosdepth: unsupported -> raises)
+
+# --- contig selection --------------------------------------------------------
+# Glob patterns over reference names. include first, then exclude. Keeps the
+# decoy/unplaced artifact contigs out of the headline report (your note).
+contigs:
+  include: ["chr*"]
+  exclude: ["*_alt", "*_random", "chrUn*", "*_decoy", "HLA*", "chrEBV"]
+  # chrM is kept by default but flagged in reports (huge mito depth skews summaries).
+
+# --- analysis ----------------------------------------------------------------
+analysis:
+  window: 10000                     # windowed-track bin size (bp)
+  hist_cap: 200000                  # clip extreme pileup depths into a top bin
+  breadth_thresholds: [1, 5, 10, 15, 20, 30]
+
+# --- copy number -------------------------------------------------------------
+copy_number:
+  ploidy: 2
+  baseline: easy-autosomal-median   # easy-autosomal-median | autosomal-median
+  # 'easy-autosomal-median' uses the callability mask below -> repeat pileups
+  # don't inflate the CN=2 reference.
+
+# --- callability strata (Park Lab SMaHT_Regional_Categorization, GRCh38) ------
+strata:
+  easy: SMaHT_easy_hg38.bed.gz
+  difficult: SMaHT_difficult_hg38.bed.gz
+  extreme: SMaHT_extreme_hg38.bed.gz
+  scatter_min_easy_frac: 0.5        # drop windows mostly outside 'easy' from the scatter
+
+# --- output ------------------------------------------------------------------
+output:
+  outdir: out
+  run_name: slug                    # slug (readable + hash) | hash
+  provenance: true                  # write <output>.provenance.json sidecar
+  plots: true
+  per_base:
+    enabled: false                  # per-base is bulky on WGS (RLE ~6x only)
+    format: bedgraph                # bedgraph (bgzip) | bigwig
