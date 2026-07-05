@@ -1,0 +1,146 @@
+# Development notes
+
+Design rationale and the details that aren't obvious from the code. Aimed at the
+next engineer (or the reviewer) who needs to understand *why*, not just *what*.
+
+## 1. The coverage algorithm
+
+Naïve per-base coverage increments a counter at every position each read covers —
+O(coverage × genome). Instead we accumulate **events**: for each aligned block
+`[start, end)`, do `depth[start] += 1` and `depth[end] -= 1`. A single `cumsum`
+at the end turns that finite-difference array into per-base depth. Cost is
+O(number of alignment blocks) ≈ O(reads), independent of depth.
+
+Two consequences worth stating explicitly:
+
+- **The arithmetic is order-independent.** `+1`/`-1` then `cumsum` is commutative,
+  so the tally does not depend on read order. Coordinate-sorting is therefore *not*
+  required by the coverage math — it's required by the **indexed region fetch**
+  (`fetch(chrom)` needs a `.crai`, which only indexes a sorted CRAM). See
+  `validate.py`; this is the kind of thing that's easy to state wrongly.
+- **Block semantics matter.** We use `read.get_blocks()`, which yields the gapless
+  aligned blocks defined by CIGAR `M`/`=`/`X` (match/mismatch), excluding `I`/`D`/
+  `N`/`S`/`H`. So deletions and reference skips correctly contribute **no** depth —
+  the same convention mosdepth uses in normal mode, which is why the two backends
+  agree to rounding.
+
+For the aggregate-only path (`per_base=False`) we skip the array entirely and just
+sum `end - start` — enough for the headline mean, in less memory.
+
+## 2. Memory strategy
+
+The per-base vector for chr1 is ~1 GB (int32 × 249 Mb). We never hold the whole
+genome: `analyze.py` processes **one chromosome at a time**, immediately reduces
+the vector to compact intermediates, then `del`s it. Peak memory ≈ one chromosome.
+
+The two intermediates are chosen because each is a *sufficient statistic* for a
+whole family of outputs:
+
+- **Depth histogram** (`analysis.depth_histogram`) — counts per depth value. Yields
+  mean, median, variance, CV, MAD, any quantile, and breadth-at-depth, all in
+  O(max_depth) with no sort. Genome-wide stats = summed per-chrom histograms.
+- **Windowed mean track** (`analysis.windowed_means`, `np.add.reduceat`) — ~1000×
+  smaller than per-base; feeds every plot and the per-window copy number.
+
+Extreme pileup depths (chrM ~20k, satellite decoys ~2k) are clipped into a top
+histogram bin (`DEFAULT_HIST_CAP`) so per-chrom histograms share a length and sum
+trivially. This is exact for the primary assembly; only the extreme tail of
+artifact contigs is approximated.
+
+## 3. Robust statistics
+
+Multi-mapping pileups give coverage a heavy right tail, which wrecks moment-based
+stats: chr21 has `sd = 71`, `cv = 4.25` — meaningless. So we report **median**,
+**scaled MAD** (`1.4826 × median(|x − median|)`, a consistent sd estimator under
+normality), and **robust CV = MAD/median** alongside the classical ones. The
+`UNEVEN` QC flag keys off robust CV, so a repeat pileup doesn't trigger a false
+"non-uniform coverage" alarm. MAD is computed as a weighted median of folded
+deviations, straight from the histogram.
+
+## 4. Two backends, one config
+
+`CoverageConfig` is the single source of truth; `dispatch.run_coverage` picks
+`native` (hand-rolled pysam) or `mosdepth` (subprocess on PATH). Both emit
+`list[ChromCoverage]`, so downstream code is backend-agnostic and "run both, diff
+the means" is a real cross-check (`test_backends.py`).
+
+Getting parity right required reconciling **default flag masks**: the hand-rolled
+default excluded unmapped|secondary|dup|**supplementary** (3332); mosdepth's
+default excludes unmapped|secondary|**qcfail**|dup (1796). `config.py` pins the
+explicit union so the two agree out of the box. `mosdepth.py` **raises** on knobs
+it can't honor (`-G` exclude-all, multi-contig subsets) rather than silently
+diverging — silent divergence is the worst outcome when the whole point is
+mutual validation.
+
+`mosdepth` is called as a **subprocess on PATH**, never via `docker run` from
+Python. Containerization belongs at the environment boundary (the CWL/Docker image
+that wraps the whole tool), not nested inside it — nested containers mean
+docker-in-docker on AWS/HPC and host↔container path translation. See the
+reproducibility sketch.
+
+## 5. Callability stratification
+
+Coverage without callability context is partly an artifact: raw per-chromosome
+means are inflated by repeat pileups and deflated by unmappable regions. We
+stratify by Park Lab's **SMaHT_Regional_Categorization** tiers — `easy` (1000G
+strict mask), `difficult` (PanMask pm151 minus 1000G), `extreme` (outside both) —
+loaded from their committed BEDs. Each stratum is turned into a boolean position
+mask using the *same* finite-difference trick as the coverage calc, then the
+per-base vector is masked into a per-tier histogram.
+
+Payoff: `easy` mean/median is the **variant-callable** coverage worth reporting,
+`easy.breadth_20x` is the somatic-sensitivity metric, and the CN baseline uses
+only easy-autosomal positions so repeat pileups don't inflate the CN=2 reference.
+
+## 6. Approximate copy number
+
+`CN ≈ ploidy × depth / baseline`, where `baseline` is the **median** (robust)
+depth of the callability-masked autosomes. Median (not mean) so gains/losses and
+pileups don't drag the diploid reference. Reported per chromosome and per window;
+the windowed scatter (callable windows only) shows intrachromosomal breakpoints.
+
+Deliberately labeled **super approximate**: it ignores tumor purity, ploidy
+normalization, and GC/mappability bias. Real callers (CNVkit, ichorCNA) handle
+those; this is a QC-grade readout, not a CN call.
+
+## 7. Per-base output — what we learned
+
+The finite-difference change-points *are* a run-length encoding, so per-base
+output is emitted as RLE BEDGRAPH intervals (`analysis.rle_intervals`) rather than
+one row per base. **But** on dense WGS this only compresses ~6× (chr21: 7.07M
+intervals for 46.7M bases; chrM changes almost every base), because depth flips at
+every read boundary. Conclusion: default to **windows**; make per-base opt-in; use
+**BigWig** if a genome-browser track is truly needed (its zoom levels compress far
+better than flat bedgraph).
+
+## 8. Preflight & provenance
+
+`validate.py::preflight` fails fast, cheapest-first: inputs exist → `@HD
+SO:coordinate` → `.crai` present → **reference M5 matches the CRAM**. The M5 check
+is the important one: CRAM stores bases as differences against the reference, so
+the wrong reference can silently reconstruct wrong bases. We compare the CRAM's
+`@SQ M5` tags to the reference's per-sequence MD5, preferring a `.dict` sidecar
+(no re-hashing) over reading the 3 GB `.fa`. `provenance.py` records code commit +
+params + input identity + this reference verification in a `*.provenance.json`
+sidecar, so every output traces back to an exact run.
+
+## 9. Testing approach
+
+`test_backends.py` cross-validates native vs mosdepth on one contig (skips when
+mosdepth/data are absent). This is necessary but not sufficient — see `TODO.md`
+for the unit tests the coverage math, histogram stats, windowing, strata masking,
+and QC flags still need (ideally against a tiny synthetic CRAM with known depth).
+
+## Known correctness caveats
+
+- **Overlapping mate pairs are double-counted.** `get_blocks` doesn't dedupe
+  overlapping read1/read2; mosdepth's default doesn't either, so the backends
+  agree — but both overstate depth in overlaps. A `--no-overlap` option is a real
+  follow-up.
+- **`LOW_CALLABLE` threshold is absolute (20×).** It should be baseline-relative
+  (e.g. breadth at ~½ the diploid baseline); on a 15× sample the fixed 20× check
+  over-flags.
+- **Histogram cap** approximates the extreme tail of pileup contigs (not the
+  primary assembly).
+- **mosdepth backend is unrun end-to-end** here (local Docker/macOS-FUSE trouble);
+  parity is by construction and needs a Linux confirmation run.

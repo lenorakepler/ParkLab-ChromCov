@@ -12,8 +12,16 @@ one normalized `list[ChromCoverage]` out, backend (hand-rolled pysam vs.
 | `dispatch.py` | `run_coverage(config)` — picks the backend. |
 | `native.py` | adapter over `chromcov.read_filter.calc_cov`. |
 | `output.py` | per-run archival (hash-keyed dir + sidecar) and cross-run `collate`. |
+| `validate.py` | input preflight: sorted / indexed / reference-M5 match. |
 | `run_example.py` | end-to-end smoke run against `data/`, with `--write` / `--collate`. |
 | `test_backends.py` | native-vs-mosdepth cross-check (skips without mosdepth/data). |
+| **analysis suite** | |
+| `analysis.py` | histogram → stats (mean/median/sd/CV/MAD/breadth), windows, RLE, copy number. |
+| `strata.py` | SMaHT easy/difficult/extreme callability loader + finite-diff mask. |
+| `qc.py` | aneuploidy-aware abnormality flags + focal per-window flags. |
+| `plots.py` | per-chrom bar + windowed-CN scatter (easy-maskable). |
+| `analyze.py` | driver → stats/windows/strata TSVs, plots, optional per-base bedgraph. |
+| `config.example.yml` | full annotated run-config sketch. |
 
 ## The native backend adapter (not written here)
 

@@ -33,6 +33,8 @@ import analysis
 import plots
 import qc
 import strata as strata_mod
+import validate
+from config import CoverageConfig
 
 _DATA = _REPO_ROOT / "data"
 _CRAM = _DATA / "COLO829T_TEST.cram"
@@ -98,6 +100,11 @@ def main():
 
     outdir = Path(args.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
+
+    # Fail fast on bad inputs before spending minutes decoding the CRAM.
+    cfg = CoverageConfig(cram=_CRAM, reference=_REF, min_mapping_quality=args.min_mapq)
+    report = validate.preflight(cfg)
+    print(f"[preflight] ok: sorted, indexed, reference {report['reference_check']['status']}")
 
     rf = ReadFilter(min_mapping_quality=args.min_mapq)
     cram = pysam.AlignmentFile(str(_CRAM), "rc", reference_filename=str(_REF),

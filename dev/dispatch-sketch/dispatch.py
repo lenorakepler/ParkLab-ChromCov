@@ -9,6 +9,7 @@ from result import ChromCoverage
 
 import native
 import mosdepth
+import validate
 
 BACKENDS = {
     "native": native.run,
@@ -16,9 +17,11 @@ BACKENDS = {
 }
 
 
-def run_coverage(config: CoverageConfig) -> list[ChromCoverage]:
+def run_coverage(config: CoverageConfig, skip_preflight: bool = False) -> list[ChromCoverage]:
     try:
         backend = BACKENDS[config.backend]
     except KeyError:
         raise ValueError(f"unknown backend {config.backend!r}; choose from {sorted(BACKENDS)}")
+    if not skip_preflight:
+        validate.preflight(config)   # sorted / indexed / reference-M5; raises on failure
     return backend(config)
