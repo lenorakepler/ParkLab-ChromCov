@@ -34,12 +34,6 @@ from .read_filter import ReadFilter, calc_cov
 from .result import ChromCoverage, write_tsv
 from .strata import STRATUM_ORDER, Strata
 
-STATS_COLUMNS = [
-    "chrom", "length", "mean", "median", "sd", "cv", "mad", "robust_cv",
-    "q25", "q75", "iqr", "breadth_1x", "breadth_10x", "breadth_20x",
-    "copy_number", "flags",
-]
-
 STRATA_COLUMNS = ["stratum", "region_bp", "pct_of_analyzed", "mean", "median", "sd", "cv",
                   "breadth_1x", "breadth_10x", "breadth_20x"]
 
@@ -69,7 +63,7 @@ class CoverageAnalysis:
         self.track_misses: list[str] = []    # chroms computed fresh from the CRAM
 
         # --- results (filled by finalize) ---
-        self.stats_rows: list[dict] = []
+        self._rows: list[ChromCoverage] = []
         self.flagged: list[tuple[str, list[str]]] = []
         self._baseline: float | None = None
         self._baseline_source: str = ""
@@ -225,7 +219,8 @@ class CoverageAnalysis:
         return val, src
 
     def finalize(self) -> None:
-        """Attach copy number + QC flags to windows and chromosomes."""
+        """Assemble the combined per-chromosome rows (mean + per-base stats + copy
+        number + QC flags) and tag the windows with CN + focal flags."""
         baseline, _ = self.baseline()
         ploidy = self.acfg.ploidy
 
@@ -233,7 +228,7 @@ class CoverageAnalysis:
             w["cn"] = copy_number(w["mean"], baseline, ploidy)
             w["flag"] = qc.window_flag(w["cn"])
 
-        self.stats_rows = []
+        self._rows = []
         self.flagged = []
         for chrom in self.chroms:
             s = self.per_chrom_stats[chrom]
@@ -241,30 +236,19 @@ class CoverageAnalysis:
             flags = qc.chrom_flags(chrom, s, cn, baseline)
             if flags:
                 self.flagged.append((chrom, flags))
-            self.stats_rows.append({
-                "chrom": chrom, "length": self.lengths[chrom],
-                "mean": round(s.mean, 2), "median": round(s.median, 2),
-                "sd": round(s.sd, 2), "cv": round(s.cv, 3),
-                "mad": round(s.mad, 2), "robust_cv": round(s.robust_cv, 3),
-                "q25": round(s.q25, 2), "q75": round(s.q75, 2), "iqr": round(s.iqr, 2),
-                "breadth_1x": round(s.breadth[1], 4), "breadth_10x": round(s.breadth[10], 4),
-                "breadth_20x": round(s.breadth[20], 4),
-                "copy_number": round(cn, 2),
-                "flags": ";".join(flags) if flags else "OK",
-            })
+            self._rows.append(ChromCoverage(
+                chrom=chrom, length=self.lengths[chrom], bases=self.bases[chrom],
+                stats=s, copy_number=cn, flags=flags))
 
     def coverage_rows(self) -> list[ChromCoverage]:
-        """The plain per-chromosome coverage table (the `coverage` deliverable),
-        derived from the same pass -- this is what makes `analyze` a superset."""
-        return [
-            ChromCoverage(chrom=c, length=self.lengths[c], bases=self.bases[c])
-            for c in self.chroms
-        ]
+        """The combined per-chromosome coverage table: mean + per-base stats +
+        copy number + flags (one table, not coverage.tsv plus a stats.tsv)."""
+        return self._rows
 
     # --- writing outputs ---------------------------------------------------
 
     def write_outputs(self, outdir: Path) -> dict[str, Path]:
-        """Write the coverage table, stats, windows, (strata), and plots under
+        """Write the combined coverage table, windows, (strata), and plots under
         `outdir` (a Level-2 analysis run). The per-base tracks are a separate
         Level-1 output (see PerBaseStore). Returns a map of name -> path."""
         outdir = Path(outdir)
@@ -274,10 +258,6 @@ class CoverageAnalysis:
         coverage_tsv = outdir / "coverage.tsv"
         write_tsv(self.coverage_rows(), coverage_tsv)
         written["coverage"] = coverage_tsv
-
-        stats_tsv = outdir / "coverage.stats.tsv"
-        self._write_stats(stats_tsv)
-        written["stats"] = stats_tsv
 
         windows_bed = outdir / "coverage.windows.bed"
         self._write_windows(windows_bed)
@@ -302,12 +282,6 @@ class CoverageAnalysis:
             written["scatter"] = scatter
 
         return written
-
-    def _write_stats(self, path: Path) -> None:
-        with path.open("w", newline="") as fh:
-            w = csv.DictWriter(fh, fieldnames=STATS_COLUMNS, delimiter="\t")
-            w.writeheader()
-            w.writerows(self.stats_rows)
 
     def _write_windows(self, path: Path) -> None:
         with path.open("w", newline="") as fh:

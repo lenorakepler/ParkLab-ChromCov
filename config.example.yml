@@ -56,11 +56,8 @@ strata:
   scatter_min_easy_frac: 0.5 # drop windows mostly outside 'easy' from the scatter
 
 # --- output ------------------------------------------------------------------
+# The default run writes per-base tracks + the combined table + plots. Pass
+# `--fast` on the CLI for the mean-only table (no per-base, stats, or plots).
 output:
   outdir: out
-  run_name: slug # slug (readable + hash) | hash
-  provenance: true # write <output>.provenance.json sidecar
   plots: true
-  per_base:
-    enabled: false # per-base is bulky on WGS (RLE ~6x only)
-    format: bedgraph # bedgraph (bgzip) | bigwig

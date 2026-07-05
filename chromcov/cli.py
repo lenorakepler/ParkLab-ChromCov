@@ -17,6 +17,7 @@ as `baseCommand: [chromcov, coverage]` with `--cram --reference --min-mapq
 from __future__ import annotations
 
 import json
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -28,7 +29,7 @@ from .config import RunConfig
 from .output import RunStore
 from .perbase import PerBaseStore, analysis_key, analysis_slug, build_track
 from .pipeline import CoverageAnalysis
-from .result import TSV_COLUMNS, write_tsv
+from .result import write_rows, write_tsv
 from .strata import Strata
 
 
@@ -82,14 +83,22 @@ def _load_run(config, *, coverage=None, analysis=None) -> RunConfig:
         )
 
 
-def _echo_table(rows) -> None:
-    click.echo("\t".join(TSV_COLUMNS))
-    for r in rows:
-        cells = r.as_row()
-        click.echo("\t".join(str(cells[c]) for c in TSV_COLUMNS))
+def _emit(rows, output, default_path) -> None:
+    """Write the coverage table. Output is the default: to `default_path` unless
+    --output FILE (or '-' for stdout) overrides. `default_path=None` means don't
+    write here (the full run already wrote it into its run dir)."""
+    if output == "-":
+        write_rows(rows, sys.stdout)
+        return
+    target = Path(output).expanduser().resolve() if output else default_path
+    if target is None:
+        return
+    target.parent.mkdir(parents=True, exist_ok=True)
+    write_tsv(rows, target)
+    click.echo(f"wrote {target}", err=True)
 
 
-# Shared input options (composed onto coverage + analyze).
+# Shared input options (composed onto the run commands).
 def input_options(func):
     func = click.option("--cram", type=click.Path(exists=True, dir_okay=False),
                         default=None, help="path to the CRAM")(func)
@@ -108,37 +117,6 @@ def input_options(func):
 @click.version_option(package_name="parklab-chromcov", prog_name="chromcov")
 def main() -> None:
     """Per-chromosome average coverage from a CRAM, with QC extensions."""
-
-
-@main.command()
-@input_options
-@click.option("--chroms", default=None, help="comma-separated contig subset (default: all)")
-@click.option("--output", type=click.Path(dir_okay=False), default=None,
-              help="write the table to FILE (default: stdout)")
-@click.option("--write", is_flag=True, help="also archive under runs/<name>/")
-@click.option("--runs-dir", "runs_dir", type=click.Path(file_okay=False), default=None,
-              help="archive directory (default: ./runs)")
-@click.option("--run-name", "run_name", type=click.Choice(["slug", "hash"]), default="slug")
-def coverage(cram, reference, index, min_mapq, config, chroms,
-             output, write, runs_dir, run_name) -> None:
-    """Per-chromosome mean coverage table (the deliverable)."""
-    run = _load_run(config, coverage=_coverage_overrides(
-        cram=cram, reference=reference, index=index, min_mapq=min_mapq, chroms=chroms))
-    cfg = run.coverage
-    rows = dispatch.run_coverage(cfg)
-
-    if output:
-        out = Path(output).expanduser().resolve()
-        out.parent.mkdir(parents=True, exist_ok=True)
-        write_tsv(rows, out)
-        click.echo(f"wrote {out}", err=True)
-    else:
-        _echo_table(rows)
-
-    if write:
-        store = RunStore(_resolve(runs_dir) or Path("runs"))
-        run_dir = store.write_run(rows, cfg, name_style=run_name)
-        click.echo(f"wrote {run_dir}/coverage.tsv (+ .provenance.json)", err=True)
 
 
 def _write_run_sidecar(path, run, config_file, store, analysis, akey, chrom_list) -> None:
@@ -167,26 +145,45 @@ def _write_run_sidecar(path, run, config_file, store, analysis, akey, chrom_list
 
 @main.command()
 @input_options
-@click.option("--chroms", default=None, help="comma-separated contig subset (default: whole genome)")
+@click.option("--chroms", default=None, help="comma-separated contig subset (default: all)")
 @click.option("--window", type=int, default=None, help="windowed-track bin size (bp)")
 @click.option("--strata", default="",
               help="callability strata as label=bed[,label=bed]; e.g. "
                    "easy=SMaHT_easy_hg38.bed.gz,difficult=...,extreme=...")
-@click.option("--per-base", "per_base", is_flag=True,
-              help="write per-base depth tracks (Level 1) so later runs reuse them")
+@click.option("--fast", is_flag=True,
+              help="mean-only per-chromosome table; skip per-base depth, stats, and plots")
 @click.option("--outdir", type=click.Path(file_okay=False), default=None,
               help="output root (default: ./out). Tracks -> <outdir>/<coverage-key>/, "
-                   "each analysis -> <outdir>/<coverage-key>/<analysis-key>/")
-def analyze(cram, reference, index, min_mapq, config, chroms, window,
-            strata, per_base, outdir) -> None:
-    """Full QC suite (Level 2): stats, windows, strata, plots (+ the coverage
-    table), reusing per-base tracks when present. Each run nests under the
-    coverage dataset it derives from, so runs (e.g. stratified vs not) accumulate
-    beside the tracks for comparison."""
+                   "each run -> <outdir>/<coverage-key>/<analysis-key>/")
+@click.option("--output", "-o", default=None,
+              help="also write the coverage table to FILE ('-' for stdout)")
+@click.option("--write", is_flag=True, help="also archive the table under runs/<name>/")
+@click.option("--runs-dir", "runs_dir", type=click.Path(file_okay=False), default=None,
+              help="archive directory (default: ./runs)")
+@click.option("--run-name", "run_name", type=click.Choice(["slug", "hash"]), default="slug")
+def coverage(cram, reference, index, min_mapq, config, chroms, window, strata,
+             fast, outdir, output, write, runs_dir, run_name) -> None:
+    """Per-chromosome coverage.
+
+    By default computes per-base depth -> a combined stats table (mean, median,
+    MAD, breadth, copy number, flags) + windows + strata + plots, all written
+    under --outdir and reusing per-base tracks when present. `--fast` gives the
+    quick mean-only table (no per-base, stats, or plots)."""
+    if fast:
+        run = _load_run(config, coverage=_coverage_overrides(
+            cram=cram, reference=reference, index=index, min_mapq=min_mapq, chroms=chroms))
+        rows = dispatch.run_coverage(run.coverage)
+        _emit(rows, output, Path(outdir or "out").expanduser().resolve() / "coverage.tsv")
+        if write:
+            store = RunStore(_resolve(runs_dir) or Path("runs"))
+            run_dir = store.write_run(rows, run.coverage, name_style=run_name)
+            click.echo(f"archived {run_dir}/coverage.tsv (+ .provenance.json)", err=True)
+        return
+
     run = _load_run(
         config,
         coverage=_coverage_overrides(cram=cram, reference=reference, index=index, min_mapq=min_mapq),
-        analysis=_analysis_overrides(window=window, strata=strata, per_base=per_base, outdir=outdir),
+        analysis=_analysis_overrides(window=window, strata=strata, outdir=outdir),
     )
     cfg, acfg = run.coverage, run.analysis
 
@@ -195,7 +192,7 @@ def analyze(cram, reference, index, min_mapq, config, chroms, window,
     analysis = CoverageAnalysis(cfg, acfg, strata_obj)
 
     chrom_list = chroms.split(",") if chroms else None
-    report = analysis.run(chroms=chrom_list, store=store, write_tracks=acfg.per_base)
+    report = analysis.run(chroms=chrom_list, store=store, write_tracks=True)
     click.echo(f"[preflight] {report['reference_check']['status']}", err=True)
 
     labels = strata_obj.labels()
@@ -204,11 +201,14 @@ def analyze(cram, reference, index, min_mapq, config, chroms, window,
     run_dir.mkdir(parents=True, exist_ok=True)
     written = analysis.write_outputs(run_dir)
     _write_run_sidecar(run_dir / "run.json", run, config, store, analysis, akey, chrom_list)
+    _emit(analysis.coverage_rows(), output, None)   # only if --output given
+    if write:
+        RunStore(_resolve(runs_dir) or Path("runs")).write_run(
+            analysis.coverage_rows(), cfg, name_style=run_name)
 
     for line in analysis.summary_lines():
         click.echo(line, err=True)
-    if acfg.per_base:
-        click.echo(f"per-base tracks (Level 1): {store.dir}", err=True)
+    click.echo(f"per-base tracks (Level 1): {store.dir}", err=True)
     click.echo(f"analysis run (Level 2): {run_dir}", err=True)
     for name, path in written.items():
         click.echo(f"  {name}: {path.name}", err=True)
@@ -223,7 +223,7 @@ def perbase(cram, reference, index, min_mapq, config, chrom, outdir) -> None:
     """Compute + store ONE chromosome's per-base depth track (Level 1).
 
     The Snakemake scatter unit; a no-op if the track already exists. Finalize the
-    coverage.json sidecar by running `analyze --per-base` (the gather step)."""
+    coverage.json sidecar by running `chromcov coverage` (the gather step)."""
     run = _load_run(config, coverage=_coverage_overrides(
         cram=cram, reference=reference, index=index, min_mapq=min_mapq, per_base=True))
     cfg = run.coverage

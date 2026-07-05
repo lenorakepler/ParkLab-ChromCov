@@ -108,12 +108,13 @@ those; this is a QC-grade readout, not a CN call.
 
 ## 7. Per-base output — what we learned
 
-The finite-difference change-points *are* a run-length encoding, so per-base
-output is emitted as RLE BEDGRAPH intervals (`ChromDepth.rle_intervals`) rather than
-one row per base. **But** on dense WGS this only compresses ~6× (chr21: 7.07M
-intervals for 46.7M bases; chrM changes almost every base), because depth flips at
-every read boundary. Conclusion: default to **windows**; make per-base opt-in; use
-**BigWig** if a genome-browser track is truly needed (its zoom levels compress far
+The finite-difference change-points *are* a run-length encoding, so the per-base
+depth tracks (`PerBaseStore`, via `ChromDepth.rle_intervals`) are RLE BEDGRAPH
+rather than one row per base. **But** on dense WGS this only compresses ~6× (chr21:
+7.07M intervals for 46.7M bases; chrM changes almost every base), because depth
+flips at every read boundary. So the tracks are the reusable base layer but are
+bulky; `--fast` skips them entirely (mean only), and **BigWig** is the better
+format if a genome-browser track is truly needed (its zoom levels compress far
 better than flat bedgraph).
 
 ## 8. Preflight & provenance

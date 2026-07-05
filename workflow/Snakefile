@@ -57,7 +57,7 @@ rule perbase:
 
 
 rule analyze:
-    """Gather: reuse every per-base track -> one Level-2 analysis run."""
+    """Gather: reuse every per-base track -> one full coverage run (Level 2)."""
     input:
         [track(c) for c in CHROMS],
     output:
@@ -68,7 +68,7 @@ rule analyze:
     run:
         strata_opt = f"--strata {params.strata}" if params.strata else ""
         shell(
-            "chromcov analyze --cram {CRAM} --reference {REFERENCE} "
+            "chromcov coverage --cram {CRAM} --reference {REFERENCE} "
             "--min-mapq {MIN_MAPQ} --chroms {params.chroms} --window {WINDOW} "
-            f"{strata_opt} --per-base --outdir {OUTDIR}"
+            f"{strata_opt} --outdir {OUTDIR}"
         )

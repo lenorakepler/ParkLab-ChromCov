@@ -18,7 +18,9 @@ requirements:
   DockerRequirement:
     dockerPull: ghcr.io/lenorakepler/parklab-chromcov:0.1.0
 
-baseCommand: [chromcov, coverage]
+# --fast = the mean-only per-chromosome table (the deliverable); drop it to get
+# the full per-base stats + windows + strata + plots.
+baseCommand: [chromcov, coverage, --fast]
 
 inputs:
   cram:

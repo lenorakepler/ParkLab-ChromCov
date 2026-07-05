@@ -18,7 +18,7 @@ flowchart TD
     DECIDE -->|"miss"| CALC["calc_cov(per_base=True)<br/>→ per-base depth vector"]
     DECIDE -->|"hit — reuse"| LOAD["load track<br/>→ reconstruct depth vector"]
 
-    CALC -->|"--per-base writes it"| TRACK[("Level 1 · per-base depth tracks<br/>out/&lt;coverage-key&gt;/chrN.per-base.bedgraph.gz<br/>+ coverage.json sidecar")]:::out
+    CALC -->|"written by default"| TRACK[("Level 1 · per-base depth tracks<br/>out/&lt;coverage-key&gt;/chrN.per-base.bedgraph.gz<br/>+ coverage.json sidecar")]:::out
     TRACK -.->|reused next run| DECIDE
     TRACK -.->|"interoperable output"| EXT["bedtools · IGV · bigWig"]
 
@@ -26,7 +26,7 @@ flowchart TD
     LOAD --> RED
     BEDS --> RED
 
-    RED --> ANALYSIS[("Level 2 · analysis run (nested)<br/>out/&lt;coverage-key&gt;/&lt;analysis-key&gt;/<br/>stats · windows · strata · plots + run.json<br/>key = coverage-key + analysis params")]:::out
+    RED --> ANALYSIS[("Level 2 · analysis run (nested)<br/>out/&lt;coverage-key&gt;/&lt;analysis-key&gt;/<br/>coverage.tsv · windows · strata · plots + run.json<br/>key = coverage-key + analysis params")]:::out
 
     ANALYSIS -.->|deferred| COLLATE["Level 3 · collate/compare runs<br/>(stratified vs not, ...)"]:::todo
 
@@ -41,9 +41,10 @@ copy-number settings. Changing `--window` or adding `--strata` therefore reuses 
 same Level-1 tracks and only re-runs the cheap Level-2 reductions. That's what makes
 "stratified vs unstratified" a fast comparison: two Level-2 runs off one Level-1 key.
 
-**`coverage` (the deliverable) is the shortcut path:** it takes `per_base=False`,
-sums aligned bases straight to `mean = bases / length`, and never builds the vector
-or the tracks — fast, for the headline table (and the CWL contract).
+**`--fast` is the shortcut path:** it takes `per_base=False`, sums aligned bases
+straight to `mean = bases / length`, and never builds the vector, the stats, or
+the tracks — just the headline mean-only table (and the CWL contract). The default
+run does the full per-base pass above.
 
 ## Orchestration layers
 
@@ -52,7 +53,7 @@ engine drive the CLI. The per-base tracks are the file substrate an engine check
 
 ```mermaid
 flowchart LR
-    LIB["chromcov package<br/>CoverageConfig · backends · ChromDepth<br/>Strata · CoverageAnalysis · PerBaseStore"] --> CLI["chromcov CLI<br/>coverage · perbase · analyze · fetch · collate"]
+    LIB["chromcov package<br/>CoverageConfig · ChromDepth · DepthHistogram<br/>Strata · CoverageAnalysis · PerBaseStore"] --> CLI["chromcov CLI<br/>coverage (--fast) · perbase · fetch · collate"]
     CLI --> SNAKE["Snakefile<br/>rule per chromosome<br/>scatter tracks → gather analysis<br/>(parallelism · resume · --dry-run)"]
     CLI --> CWLW["coverage.cwl + Docker<br/>portable tool wrapper"]
 
@@ -63,7 +64,7 @@ flowchart LR
 - **Built-in reuse** (the decision diamond above) makes `chromcov` self-contained —
   no engine needed to get incremental behavior.
 - **Snakemake** scatters one `chromcov perbase --chrom N` per chromosome (free
-  parallelism + resume), then gathers into one `chromcov analyze` that reuses the
+  parallelism + resume), then gathers into one `chromcov coverage` that reuses the
   tracks. It imports `chromcov` to compute the deterministic keys, so its rule
   outputs land on the exact same content-addressed paths.
 - **CWL** wraps `chromcov coverage` as a portable, Dockerized tool for the SMaHT

@@ -26,7 +26,8 @@ provided COLO829T CRAM (~15× WGS), the primary assembly:
 
 The per-chromosome spread is real COLO829T biology — aneuploidy (chr3/7/20 gains,
 chr5/10/18 losses), a single X, loss of Y, and high mitochondrial copy number.
-Full table + all chromosomes: `out/coverage.stats.tsv`.
+Full combined table (mean + stats + copy number + flags), all chromosomes:
+`out/<coverage-key>/<analysis-key>/coverage.tsv`.
 
 ## Quick start
 
@@ -35,40 +36,42 @@ Full table + all chromosomes: `out/coverage.stats.tsv`.
 #    COLO829T_TEST.cram(.crai) + GCA_000001405.15_GRCh38_no_alt_analysis_set.fa(.fai)
 uv sync                         # installs the package + the `chromcov` CLI
 
-# 2. per-chromosome coverage table (the deliverable; no container needed)
+# full run (default): per-base depth -> combined stats table + windows + copy
+# number + strata + plots + reusable tracks, all written under ./out
 chromcov coverage --cram data/COLO829T_TEST.cram \
   --reference data/GCA_000001405.15_GRCh38_no_alt_analysis_set.fa
 
-# 3. full analysis (superset of the table): stats + windows + copy number + plots + QC flags
-chromcov analyze --cram data/COLO829T_TEST.cram \
-  --reference data/GCA_000001405.15_GRCh38_no_alt_analysis_set.fa
+# just the numbers: mean-only per-chromosome table (no per-base, stats, or plots)
+chromcov coverage --cram … --reference … --fast
 
 # whole genome by default; add `--chroms chr21,chrM` for a fast subset,
 # `--config config.example.yml` to drive a run from one file, or
 # `--strata easy=SMaHT_easy_hg38.bed.gz,...` for callability-stratified coverage.
 ```
 
-`chromcov coverage --write` archives each run under `runs/<name>/` with a
-provenance sidecar; `chromcov collate` compares them. An optional mosdepth
-cross-check (`scripts/mosdepth_coverage.py`) emits the same `coverage.tsv` format
-for validation — it needs the `mosdepth` binary on PATH, but chromcov itself does not.
+The combined coverage table (mean, median, MAD, breadth, copy number, flags) is
+one file — `--fast` just leaves the per-base columns unfilled. `--write` also
+archives the table under `runs/<name>/`; `chromcov collate` compares them. An
+optional mosdepth cross-check (`scripts/mosdepth_coverage.py`) emits the same
+`coverage.tsv` format for validation — it needs the `mosdepth` binary on PATH,
+but chromcov itself does not.
 
-## Compute once, analyze many (per-base tracks + reuse)
+## Compute once, re-analyze cheaply (per-base tracks + reuse)
 
 Coverage is expensive; re-deriving stats/strata/plots from it is cheap. So the
 per-base depth is a first-class, interoperable **output** (a standard
-`bedgraph.gz`, one per chromosome), not a hidden cache — see `WORKFLOW.md` for
-the diagram. Three levels, each content-addressed:
+`bedgraph.gz`, one per chromosome), written by default — not a hidden cache; see
+`WORKFLOW.md`. Three levels, each content-addressed:
 
 ```bash
 chromcov fetch strata                    # download the SMaHT easy/difficult/extreme BEDs
 
-# 1st analyze --per-base writes per-base tracks (Level 1) under out/<coverage-key>/
-chromcov analyze --cram … --reference … --chroms chr20,chr21,chrX,chrY,chrM --per-base
+# 1st run writes per-base tracks (Level 1) under out/<coverage-key>/
+chromcov coverage --cram … --reference … --chroms chr20,chr21,chrX,chrY,chrM
 
-# a 2nd analyze REUSES those tracks (no CRAM recompute) and nests a separate
-# hashed run dir beside them, so stratified-vs-not compares off one coverage
-chromcov analyze --cram … --reference … --chroms chr20,chr21,chrX,chrY,chrM \
+# a 2nd run REUSES those tracks (no CRAM recompute) and nests a separate hashed
+# run dir beside them, so stratified-vs-not compares off one coverage dataset
+chromcov coverage --cram … --reference … --chroms chr20,chr21,chrX,chrY,chrM \
   --strata easy=data/SMaHT_easy_hg38.bed.gz,difficult=data/SMaHT_difficult_hg38.bed.gz,extreme=data/SMaHT_extreme_hg38.bed.gz
 ```
 
@@ -78,11 +81,11 @@ for one coverage dataset is co-located:
 
 ```
 out/<coverage-key>/                       chrN.per-base.bedgraph.gz + coverage.json   (Level 1)
-out/<coverage-key>/<analysis-key>/        stats · windows · strata · plots + run.json  (Level 2)
+out/<coverage-key>/<analysis-key>/        coverage.tsv · windows · strata · plots + run.json  (Level 2)
 ```
 
 The same steps run under **Snakemake** (scatter one track per chromosome, gather
-into one analysis; free parallelism + resume):
+into one full run; free parallelism + resume):
 
 ```bash
 uv run snakemake --cores 4 --configfile config/config.example.yaml        # -n for a dry-run DAG
@@ -104,19 +107,18 @@ finite-difference algorithm that costs O(reads), not O(bases).
 ## Code flow
 
 ```
-CoverageConfig ──► preflight (validate.py)   sorted? indexed? reference matches?
+chromcov coverage ──► preflight (validate.py)   sorted? indexed? reference matches?
        │
-       ├──► dispatch.run_coverage ──► calc_cov ──► list[ChromCoverage]
-       │                                             └► RunStore (run dir + provenance)
-       │        (optional cross-check: scripts/mosdepth_coverage.py, same format)
+       ├── --fast ─► dispatch.run_coverage ─► calc_cov ─► mean-only coverage.tsv
+       │             (optional cross-check: scripts/mosdepth_coverage.py, same format)
        │
-       └──► CoverageAnalysis (native per-base, one memory-bounded pass per chrom):
+       └── default ─► CoverageAnalysis (per-base, one memory-bounded pass per chrom):
                  calc_cov(per_base=True) ──► ChromDepth(per-base depth vector)
-                     ├─ .histogram()      ─► stats / MAD / breadth
+                     ├─ .histogram() → DepthHistogram ─► stats / MAD / breadth
                      ├─ .windowed_means() ─► windows ─► plots, copy number
                      ├─ Strata.mask()     ─► per-tier callable coverage
-                     ├─ qc.chrom_flags    ─► abnormality flags
-                     └─ .rle_intervals()  ─► optional per-base bedgraph
+                     ├─ qc.chrom_flags    ─► abnormality flags → combined coverage.tsv
+                     └─ PerBaseStore      ─► per-base bedgraph tracks (reused next run)
 ```
 
 ## Repo layout
