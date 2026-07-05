@@ -62,18 +62,23 @@ the diagram. Three levels, each content-addressed:
 ```bash
 chromcov fetch strata                    # download the SMaHT easy/difficult/extreme BEDs
 
-# 1st analyze --per-base writes per-base tracks (Level 1) under out/perbase/<coverage-key>/
+# 1st analyze --per-base writes per-base tracks (Level 1) under out/<coverage-key>/
 chromcov analyze --cram … --reference … --chroms chr20,chr21,chrX,chrY,chrM --per-base
 
-# a 2nd analyze REUSES those tracks (no CRAM recompute) and writes a separate
-# hashed run dir, so stratified-vs-not is a fast comparison off the same coverage
+# a 2nd analyze REUSES those tracks (no CRAM recompute) and nests a separate
+# hashed run dir beside them, so stratified-vs-not compares off one coverage
 chromcov analyze --cram … --reference … --chroms chr20,chr21,chrX,chrY,chrM \
   --strata easy=data/SMaHT_easy_hg38.bed.gz,difficult=data/SMaHT_difficult_hg38.bed.gz,extreme=data/SMaHT_extreme_hg38.bed.gz
 ```
 
 The Level-1 key hashes *inputs + read-filter params* only, so changing `--window`
-or `--strata` reuses the tracks and re-runs just the cheap reductions. Each
-analysis lands in `out/analysis/<analysis-key>/` with a `run.json` sidecar.
+or `--strata` reuses the tracks and re-runs just the cheap reductions. Everything
+for one coverage dataset is co-located:
+
+```
+out/<coverage-key>/                       chrN.per-base.bedgraph.gz + coverage.json   (Level 1)
+out/<coverage-key>/<analysis-key>/        stats · windows · strata · plots + run.json  (Level 2)
+```
 
 The same steps run under **Snakemake** (scatter one track per chromosome, gather
 into one analysis; free parallelism + resume):

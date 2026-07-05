@@ -161,15 +161,15 @@ def _write_run_sidecar(path, store, acfg, analysis, labels, akey, chrom_list) ->
                    "easy=SMaHT_easy_hg38.bed.gz,difficult=...,extreme=...")
 @click.option("--per-base", "per_base", is_flag=True,
               help="write per-base depth tracks (Level 1) so later runs reuse them")
-@click.option("--perbase-root", "perbase_root", type=click.Path(file_okay=False), default=None,
-              help="per-base track store root (default: <outdir>/perbase)")
 @click.option("--outdir", type=click.Path(file_okay=False), default=None,
-              help="output directory root (default: ./out)")
+              help="output root (default: ./out). Tracks -> <outdir>/<coverage-key>/, "
+                   "each analysis -> <outdir>/<coverage-key>/<analysis-key>/")
 def analyze(cram, reference, index, min_mapq, config, chroms, window,
-            strata, per_base, perbase_root, outdir) -> None:
+            strata, per_base, outdir) -> None:
     """Full QC suite (Level 2): stats, windows, strata, plots (+ the coverage
-    table), reusing per-base tracks when present. Writes to a hashed run dir so
-    runs (e.g. stratified vs not) accumulate for comparison."""
+    table), reusing per-base tracks when present. Each run nests under the
+    coverage dataset it derives from, so runs (e.g. stratified vs not) accumulate
+    beside the tracks for comparison."""
     cfg = _build_coverage_config(cram, reference, index, min_mapq, config)
 
     acfg = AnalysisConfig.from_yaml(config) if config else AnalysisConfig()
@@ -180,8 +180,7 @@ def analyze(cram, reference, index, min_mapq, config, chroms, window,
     if per_base:
         acfg.per_base = True
 
-    root = Path(perbase_root).expanduser().resolve() if perbase_root else acfg.outdir / "perbase"
-    store = PerBaseStore(root, cfg)
+    store = PerBaseStore(acfg.outdir, cfg)
 
     strata_obj = Strata.from_arg(strata) if strata else Strata.from_arg(acfg.strata)
     analysis = CoverageAnalysis(cfg, acfg, strata_obj)
@@ -192,7 +191,7 @@ def analyze(cram, reference, index, min_mapq, config, chroms, window,
 
     labels = strata_obj.labels()
     akey = analysis_key(store.key, acfg, labels)
-    run_dir = acfg.outdir / "analysis" / analysis_slug(acfg, labels, akey)
+    run_dir = store.dir / analysis_slug(acfg, labels, akey)   # nest under the coverage-key
     run_dir.mkdir(parents=True, exist_ok=True)
     written = analysis.write_outputs(run_dir)
     _write_run_sidecar(run_dir / "run.json", store, acfg, analysis, labels, akey, chrom_list)
@@ -209,15 +208,15 @@ def analyze(cram, reference, index, min_mapq, config, chroms, window,
 @main.command()
 @input_options
 @click.option("--chrom", required=True, help="the single chromosome to compute a track for")
-@click.option("--perbase-root", "perbase_root", type=click.Path(file_okay=False), default="out/perbase",
-              help="per-base track store root (default: out/perbase)")
-def perbase(cram, reference, index, min_mapq, config, chrom, perbase_root) -> None:
+@click.option("--outdir", type=click.Path(file_okay=False), default="out",
+              help="output root (default: out). Track -> <outdir>/<coverage-key>/")
+def perbase(cram, reference, index, min_mapq, config, chrom, outdir) -> None:
     """Compute + store ONE chromosome's per-base depth track (Level 1).
 
     The Snakemake scatter unit; a no-op if the track already exists. Finalize the
     coverage.json sidecar by running `analyze --per-base` (the gather step)."""
     cfg = _build_coverage_config(cram, reference, index, min_mapq, config, per_base=True)
-    store = PerBaseStore(Path(perbase_root).expanduser().resolve(), cfg)
+    store = PerBaseStore(Path(outdir).expanduser().resolve(), cfg)
     if store.has(chrom):
         click.echo(f"track exists (skip): {store.track_path(chrom)}", err=True)
         return

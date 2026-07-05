@@ -18,7 +18,7 @@ flowchart TD
     DECIDE -->|"miss"| CALC["calc_cov(per_base=True)<br/>→ per-base depth vector"]
     DECIDE -->|"hit — reuse"| LOAD["load track<br/>→ reconstruct depth vector"]
 
-    CALC -->|"--per-base writes it"| TRACK[("Level 1 · per-base depth tracks<br/>out/perbase/&lt;coverage-key&gt;/chrN.per-base.bedgraph.gz<br/>+ coverage.json sidecar")]:::out
+    CALC -->|"--per-base writes it"| TRACK[("Level 1 · per-base depth tracks<br/>out/&lt;coverage-key&gt;/chrN.per-base.bedgraph.gz<br/>+ coverage.json sidecar")]:::out
     TRACK -.->|reused next run| DECIDE
     TRACK -.->|"interoperable output"| EXT["bedtools · IGV · bigWig"]
 
@@ -26,7 +26,7 @@ flowchart TD
     LOAD --> RED
     BEDS --> RED
 
-    RED --> ANALYSIS[("Level 2 · analysis run<br/>out/analysis/&lt;analysis-key&gt;/<br/>stats · windows · strata · plots + run.json<br/>key = coverage-key + analysis params")]:::out
+    RED --> ANALYSIS[("Level 2 · analysis run (nested)<br/>out/&lt;coverage-key&gt;/&lt;analysis-key&gt;/<br/>stats · windows · strata · plots + run.json<br/>key = coverage-key + analysis params")]:::out
 
     ANALYSIS -.->|deferred| COLLATE["Level 3 · collate/compare runs<br/>(stratified vs not, ...)"]:::todo
 

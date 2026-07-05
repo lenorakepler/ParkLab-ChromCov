@@ -26,15 +26,15 @@ MIN_MAPQ = int(config.get("min_mapq", 0))
 WINDOW = int(config.get("window", 10_000))
 STRATA = config.get("strata", {}) or {}       # {label: bed path}
 OUTDIR = Path(config.get("outdir", "out"))
-PERBASE_ROOT = OUTDIR / "perbase"
 
 # --- derive the content-addressed keys (single source of truth: chromcov) --
+# Tracks live at <outdir>/<coverage-key>/ and each analysis nests inside it.
 _cfg = CoverageConfig(cram=CRAM, reference=REFERENCE, min_mapping_quality=MIN_MAPQ)
-_store = PerBaseStore(PERBASE_ROOT, _cfg)
+_store = PerBaseStore(OUTDIR, _cfg)
 _acfg = AnalysisConfig(window=WINDOW, strata=STRATA)
 _labels = sorted(STRATA)
 _akey = analysis_key(_store.key, _acfg, _labels)
-RUN_DIR = OUTDIR / "analysis" / analysis_slug(_acfg, _labels, _akey)
+RUN_DIR = _store.dir / analysis_slug(_acfg, _labels, _akey)
 
 
 def track(chrom):
@@ -53,7 +53,7 @@ rule perbase:
         track("{chrom}"),
     shell:
         "chromcov perbase --cram {CRAM} --reference {REFERENCE} "
-        "--min-mapq {MIN_MAPQ} --chrom {wildcards.chrom} --perbase-root " + str(PERBASE_ROOT)
+        "--min-mapq {MIN_MAPQ} --chrom {wildcards.chrom} --outdir " + str(OUTDIR)
 
 
 rule analyze:
@@ -70,5 +70,5 @@ rule analyze:
         shell(
             "chromcov analyze --cram {CRAM} --reference {REFERENCE} "
             "--min-mapq {MIN_MAPQ} --chroms {params.chroms} --window {WINDOW} "
-            f"{strata_opt} --per-base --perbase-root {PERBASE_ROOT} --outdir {OUTDIR}"
+            f"{strata_opt} --per-base --outdir {OUTDIR}"
         )
