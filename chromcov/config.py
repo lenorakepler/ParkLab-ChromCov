@@ -215,3 +215,29 @@ class AnalysisConfig(BaseModel):
             "plots": output.get("plots", True),
         }
         return cls.model_validate(payload)
+
+
+class RunConfig(BaseModel):
+    """A whole run = coverage config + analysis config.
+
+    The single place a run is assembled from, so the "config is authoritative,
+    CLI only overrides" rule lives in one method (`load`) instead of being
+    re-implemented per command. The config file (if given) supplies the base; the
+    CLI passes dicts of only the options it was *explicitly* given, which are
+    merged on top. Defaults and validation stay in the two models -- nothing is
+    duplicated in the CLI."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    coverage: CoverageConfig
+    analysis: AnalysisConfig = AnalysisConfig()
+
+    @classmethod
+    def load(cls, path: str | Path | None = None, *,
+             coverage: dict | None = None, analysis: dict | None = None) -> "RunConfig":
+        cov_base = CoverageConfig.from_yaml(path).model_dump() if path else {}
+        ana_base = AnalysisConfig.from_yaml(path).model_dump() if path else {}
+        return cls(
+            coverage=CoverageConfig.model_validate({**cov_base, **(coverage or {})}),
+            analysis=AnalysisConfig.model_validate({**ana_base, **(analysis or {})}),
+        )

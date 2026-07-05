@@ -11,7 +11,7 @@ Public API:
 """
 from .analysis import ChromDepth, ChromStats
 from .backends import CoverageBackend, MosdepthBackend, NativeBackend, get_backend
-from .config import AnalysisConfig, CoverageConfig
+from .config import AnalysisConfig, CoverageConfig, RunConfig
 from .dispatch import run_coverage
 from .output import RunStore
 from .perbase import PerBaseStore
@@ -23,6 +23,7 @@ from .strata import Strata
 __all__ = [
     "CoverageConfig",
     "AnalysisConfig",
+    "RunConfig",
     "run_coverage",
     "CoverageBackend",
     "NativeBackend",

@@ -21,9 +21,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import click
+from pydantic import ValidationError
 
 from . import dispatch, fetch, provenance
-from .config import AnalysisConfig, CoverageConfig
+from .config import RunConfig
 from .output import RunStore
 from .perbase import PerBaseStore, analysis_key, analysis_slug, build_track
 from .pipeline import CoverageAnalysis
@@ -35,33 +36,52 @@ def _resolve(p: str | None) -> Path | None:
     return Path(p).expanduser().resolve() if p else None
 
 
-def _build_coverage_config(cram, reference, index, min_mapq, config,
-                           backend=None, chroms=None, per_base=False) -> CoverageConfig:
-    """Build a validated CoverageConfig from CLI options, optionally layered over
-    a --config YAML (explicit options win)."""
-    overrides: dict = {}
-    if cram:
-        overrides["cram"] = str(_resolve(cram))
-    if reference:
-        overrides["reference"] = str(_resolve(reference))
-    if index:
-        overrides["index"] = str(_resolve(index))
-    if backend:
-        overrides["backend"] = backend
-    if min_mapq is not None:
-        overrides["min_mapping_quality"] = min_mapq
-    if chroms:
-        overrides["chroms"] = tuple(chroms.split(","))
-    if per_base:
-        overrides["per_base"] = True
+# The CLI only ever contributes *overrides*: dicts of the options actually given,
+# mapped to config-field names. Defaults + validation live in the models; the
+# config file (if any) is the base. This is the whole "config authoritative, CLI
+# overrides" rule, and it lives only here.
 
-    if config:
-        base = CoverageConfig.from_yaml(config).model_dump()
-        base.update(overrides)
-        return CoverageConfig.model_validate(base)
-    if "cram" not in overrides or "reference" not in overrides:
-        raise click.UsageError("--cram and --reference are required (or pass --config).")
-    return CoverageConfig.model_validate(overrides)
+def _coverage_overrides(*, cram=None, reference=None, index=None, min_mapq=None,
+                        backend=None, chroms=None, per_base=False) -> dict:
+    ov: dict = {}
+    if cram:
+        ov["cram"] = str(_resolve(cram))
+    if reference:
+        ov["reference"] = str(_resolve(reference))
+    if index:
+        ov["index"] = str(_resolve(index))
+    if backend:
+        ov["backend"] = backend
+    if min_mapq is not None:
+        ov["min_mapping_quality"] = min_mapq
+    if chroms:
+        ov["chroms"] = tuple(chroms.split(","))
+    if per_base:
+        ov["per_base"] = True
+    return ov
+
+
+def _analysis_overrides(*, window=None, strata=None, per_base=False, outdir=None) -> dict:
+    ov: dict = {}
+    if window:
+        ov["window"] = window
+    if strata:
+        ov["strata"] = dict(kv.split("=", 1) for kv in strata.split(",") if kv)
+    if per_base:
+        ov["per_base"] = True
+    if outdir:
+        ov["outdir"] = str(Path(outdir).expanduser().resolve())
+    return ov
+
+
+def _load_run(config, *, coverage=None, analysis=None) -> RunConfig:
+    try:
+        return RunConfig.load(config, coverage=coverage, analysis=analysis)
+    except ValidationError as e:
+        raise click.UsageError(
+            "invalid or incomplete configuration -- provide --cram and --reference "
+            f"(or a --config that sets them).\n{e}"
+        )
 
 
 def _echo_table(rows) -> None:
@@ -105,8 +125,10 @@ def main() -> None:
 def coverage(cram, reference, index, min_mapq, config, backend, chroms,
              output, write, runs_dir, run_name) -> None:
     """Per-chromosome mean coverage table (the deliverable)."""
-    cfg = _build_coverage_config(cram, reference, index, min_mapq, config,
-                                 backend=backend, chroms=chroms)
+    run = _load_run(config, coverage=_coverage_overrides(
+        cram=cram, reference=reference, index=index, min_mapq=min_mapq,
+        backend=backend, chroms=chroms))
+    cfg = run.coverage
     rows = dispatch.run_coverage(cfg)
 
     if output:
@@ -123,28 +145,23 @@ def coverage(cram, reference, index, min_mapq, config, backend, chroms,
         click.echo(f"wrote {run_dir}/coverage.tsv (+ .provenance.json)", err=True)
 
 
-def _write_run_sidecar(path, store, acfg, analysis, labels, akey, chrom_list) -> None:
-    """run.json for a Level-2 analysis run: what params produced it + the
-    coverage-key (Level-1 tracks) it derived from."""
+def _write_run_sidecar(path, run, config_file, store, analysis, akey, chrom_list) -> None:
+    """run.json for a Level-2 analysis run. Self-describing + re-runnable: it
+    embeds the *resolved* RunConfig (so the run reproduces from the sidecar alone)
+    and points back at the coverage-key (Level-1 tracks) and the source config
+    file, if any."""
     baseline, source = analysis.baseline()
     record = {
-        "schema": "chromcov.analysis-run/1",
+        "schema": "chromcov.analysis-run/2",
         "generated_utc": datetime.now(timezone.utc).isoformat(),
         "tool": provenance.tool_version(),
         "code": provenance.git_provenance(),
         "analysis_key": akey,
         "coverage_key": store.key,
         "perbase_dir": str(store.dir),
-        "params": {
-            "window": acfg.window,
-            "baseline": acfg.baseline,
-            "ploidy": acfg.ploidy,
-            "hist_cap": acfg.hist_cap,
-            "breadth_thresholds": list(acfg.breadth_thresholds),
-            "strata": labels,
-            "min_mapping_quality": store.config.min_mapping_quality,
-            "chroms": chrom_list or "all",
-        },
+        "config_file": str(_resolve(config_file)) if config_file else None,
+        "config": run.model_dump(mode="json"),         # the whole resolved run config
+        "chroms_run": chrom_list or "all",
         "chromosomes": analysis.chroms,
         "baseline": {"value": round(baseline, 4), "source": source},
         "flagged": {c: fl for c, fl in analysis.flagged},
@@ -170,19 +187,15 @@ def analyze(cram, reference, index, min_mapq, config, chroms, window,
     table), reusing per-base tracks when present. Each run nests under the
     coverage dataset it derives from, so runs (e.g. stratified vs not) accumulate
     beside the tracks for comparison."""
-    cfg = _build_coverage_config(cram, reference, index, min_mapq, config)
-
-    acfg = AnalysisConfig.from_yaml(config) if config else AnalysisConfig()
-    if window:
-        acfg.window = window
-    if outdir:
-        acfg.outdir = Path(outdir).expanduser().resolve()
-    if per_base:
-        acfg.per_base = True
+    run = _load_run(
+        config,
+        coverage=_coverage_overrides(cram=cram, reference=reference, index=index, min_mapq=min_mapq),
+        analysis=_analysis_overrides(window=window, strata=strata, per_base=per_base, outdir=outdir),
+    )
+    cfg, acfg = run.coverage, run.analysis
 
     store = PerBaseStore(acfg.outdir, cfg)
-
-    strata_obj = Strata.from_arg(strata) if strata else Strata.from_arg(acfg.strata)
+    strata_obj = Strata.from_arg(acfg.strata)
     analysis = CoverageAnalysis(cfg, acfg, strata_obj)
 
     chrom_list = chroms.split(",") if chroms else None
@@ -194,7 +207,7 @@ def analyze(cram, reference, index, min_mapq, config, chroms, window,
     run_dir = store.dir / analysis_slug(acfg, labels, akey)   # nest under the coverage-key
     run_dir.mkdir(parents=True, exist_ok=True)
     written = analysis.write_outputs(run_dir)
-    _write_run_sidecar(run_dir / "run.json", store, acfg, analysis, labels, akey, chrom_list)
+    _write_run_sidecar(run_dir / "run.json", run, config, store, analysis, akey, chrom_list)
 
     for line in analysis.summary_lines():
         click.echo(line, err=True)
@@ -215,7 +228,9 @@ def perbase(cram, reference, index, min_mapq, config, chrom, outdir) -> None:
 
     The Snakemake scatter unit; a no-op if the track already exists. Finalize the
     coverage.json sidecar by running `analyze --per-base` (the gather step)."""
-    cfg = _build_coverage_config(cram, reference, index, min_mapq, config, per_base=True)
+    run = _load_run(config, coverage=_coverage_overrides(
+        cram=cram, reference=reference, index=index, min_mapq=min_mapq, per_base=True))
+    cfg = run.coverage
     store = PerBaseStore(Path(outdir).expanduser().resolve(), cfg)
     if store.has(chrom):
         click.echo(f"track exists (skip): {store.track_path(chrom)}", err=True)

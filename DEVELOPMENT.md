@@ -128,6 +128,12 @@ the wrong reference can silently reconstruct wrong bases. We compare the CRAM's
 params + input identity + this reference verification in a `*.provenance.json`
 sidecar, so every output traces back to an exact run.
 
+A run is assembled in one place — `RunConfig.load` (config.py): the `--config`
+file is the base, the CLI contributes only overrides. The output sidecars then
+embed the **resolved** `RunConfig` (plus a pointer to the source config file), so
+a per-base track (`coverage.json`) or an analysis run (`run.json`) is
+self-describing and re-runnable from the sidecar alone.
+
 ## 9. Testing approach
 
 `tests/test_backends.py` cross-validates native vs mosdepth on one contig (skips

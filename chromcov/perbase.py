@@ -122,6 +122,7 @@ class PerBaseStore:
             outputs=[self.track_path(c) for c in summary],
         )
         record["coverage_key"] = self.key
+        record["config"] = self.config.model_dump(mode="json")   # the resolved coverage config
         record["chromosomes"] = summary
         path = self.dir / SIDECAR
         path.write_text(json.dumps(record, indent=2, sort_keys=True))
