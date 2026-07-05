@@ -30,16 +30,17 @@ sum `end - start` — enough for the headline mean, in less memory.
 ## 2. Memory strategy
 
 The per-base vector for chr1 is ~1 GB (int32 × 249 Mb). We never hold the whole
-genome: `analyze.py` processes **one chromosome at a time**, immediately reduces
-the vector to compact intermediates, then `del`s it. Peak memory ≈ one chromosome.
+genome: `CoverageAnalysis` (`pipeline.py`) processes **one chromosome at a time**,
+wrapping each per-base vector in a `ChromDepth` (`analysis.py`), immediately
+reducing it to compact intermediates, then `del`s it. Peak memory ≈ one chromosome.
 
 The two intermediates are chosen because each is a *sufficient statistic* for a
 whole family of outputs:
 
-- **Depth histogram** (`analysis.depth_histogram`) — counts per depth value. Yields
+- **Depth histogram** (`ChromDepth.histogram`) — counts per depth value. Yields
   mean, median, variance, CV, MAD, any quantile, and breadth-at-depth, all in
   O(max_depth) with no sort. Genome-wide stats = summed per-chrom histograms.
-- **Windowed mean track** (`analysis.windowed_means`, `np.add.reduceat`) — ~1000×
+- **Windowed mean track** (`ChromDepth.windowed_means`, `np.add.reduceat`) — ~1000×
   smaller than per-base; feeds every plot and the per-window copy number.
 
 Extreme pileup depths (chrM ~20k, satellite decoys ~2k) are clipped into a top
@@ -59,15 +60,17 @@ deviations, straight from the histogram.
 
 ## 4. Two backends, one config
 
-`CoverageConfig` is the single source of truth; `dispatch.run_coverage` picks
-`native` (hand-rolled pysam) or `mosdepth` (subprocess on PATH). Both emit
-`list[ChromCoverage]`, so downstream code is backend-agnostic and "run both, diff
-the means" is a real cross-check (`test_backends.py`).
+`CoverageConfig` is the single source of truth; `dispatch.run_coverage` picks a
+backend from the registry — `NativeBackend` (hand-rolled pysam) or
+`MosdepthBackend` (subprocess on PATH), both subclasses of the `CoverageBackend`
+ABC in `backends.py`. Both emit `list[ChromCoverage]`, so downstream code is
+backend-agnostic and "run both, diff the means" is a real cross-check
+(`tests/test_backends.py`).
 
 Getting parity right required reconciling **default flag masks**: the hand-rolled
 default excluded unmapped|secondary|dup|**supplementary** (3332); mosdepth's
 default excludes unmapped|secondary|**qcfail**|dup (1796). `config.py` pins the
-explicit union so the two agree out of the box. `mosdepth.py` **raises** on knobs
+explicit union so the two agree out of the box. `MosdepthBackend` **raises** on knobs
 it can't honor (`-G` exclude-all, multi-contig subsets) rather than silently
 diverging — silent divergence is the worst outcome when the whole point is
 mutual validation.
@@ -84,9 +87,10 @@ Coverage without callability context is partly an artifact: raw per-chromosome
 means are inflated by repeat pileups and deflated by unmappable regions. We
 stratify by Park Lab's **SMaHT_Regional_Categorization** tiers — `easy` (1000G
 strict mask), `difficult` (PanMask pm151 minus 1000G), `extreme` (outside both) —
-loaded from their committed BEDs. Each stratum is turned into a boolean position
-mask using the *same* finite-difference trick as the coverage calc, then the
-per-base vector is masked into a per-tier histogram.
+loaded from their committed BEDs into a `Strata` (`strata.py`). `Strata.mask`
+turns each stratum into a boolean position mask using the *same* finite-difference
+trick as the coverage calc, then `ChromDepth.masked(mask).histogram()` reduces the
+per-base vector into a per-tier histogram.
 
 Payoff: `easy` mean/median is the **variant-callable** coverage worth reporting,
 `easy.breadth_20x` is the somatic-sensitivity metric, and the CN baseline uses
@@ -106,7 +110,7 @@ those; this is a QC-grade readout, not a CN call.
 ## 7. Per-base output — what we learned
 
 The finite-difference change-points *are* a run-length encoding, so per-base
-output is emitted as RLE BEDGRAPH intervals (`analysis.rle_intervals`) rather than
+output is emitted as RLE BEDGRAPH intervals (`ChromDepth.rle_intervals`) rather than
 one row per base. **But** on dense WGS this only compresses ~6× (chr21: 7.07M
 intervals for 46.7M bases; chrM changes almost every base), because depth flips at
 every read boundary. Conclusion: default to **windows**; make per-base opt-in; use
@@ -126,10 +130,13 @@ sidecar, so every output traces back to an exact run.
 
 ## 9. Testing approach
 
-`test_backends.py` cross-validates native vs mosdepth on one contig (skips when
-mosdepth/data are absent). This is necessary but not sufficient — see `TODO.md`
-for the unit tests the coverage math, histogram stats, windowing, strata masking,
-and QC flags still need (ideally against a tiny synthetic CRAM with known depth).
+`tests/test_backends.py` cross-validates native vs mosdepth on one contig (skips
+when mosdepth/data are absent). `tests/test_analysis.py` unit-tests the reduction
+math directly on hand-built depth vectors — `ChromDepth` histogram/stats
+(incl. the lower-quantile convention)/windowing/RLE, `Strata.mask` (overlap +
+clip), the aneuploidy-aware `qc` flags, and copy number — needing no CRAM. The
+remaining gap (see `TODO.md`) is a tiny synthetic CRAM to exercise `calc_cov`
+end-to-end (deletions/skips contributing 0 depth) against known values.
 
 ## Known correctness caveats
 

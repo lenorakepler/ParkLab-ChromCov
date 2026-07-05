@@ -33,17 +33,24 @@ Full table + all chromosomes: `out/coverage.stats.tsv`.
 ```bash
 # 1. get the data (see dev/CONTEXT.md for URLs) into data/
 #    COLO829T_TEST.cram(.crai) + GCA_000001405.15_GRCh38_no_alt_analysis_set.fa(.fai)
-uv sync
+uv sync                         # installs the package + the `chromcov` CLI
 
-# 2. per-chromosome coverage table (native backend, no container needed)
-uv run python dev/dispatch-sketch/run_example.py --backend native --write
+# 2. per-chromosome coverage table (the deliverable; native backend, no container)
+chromcov coverage --cram data/COLO829T_TEST.cram \
+  --reference data/GCA_000001405.15_GRCh38_no_alt_analysis_set.fa
 
-# 3. full analysis: stats + windows + copy number + plots + QC flags
-uv run --with matplotlib python dev/dispatch-sketch/analyze.py
+# 3. full analysis (superset of the table): stats + windows + copy number + plots + QC flags
+chromcov analyze --cram data/COLO829T_TEST.cram \
+  --reference data/GCA_000001405.15_GRCh38_no_alt_analysis_set.fa
+
+# whole genome by default; add `--chroms chr21,chrM` for a fast subset,
+# `--config config.example.yml` to drive a run from one file, or
+# `--strata easy=SMaHT_easy_hg38.bed.gz,...` for callability-stratified coverage.
 ```
 
-Optional callability stratification (Park Lab SMaHT masks) and the mosdepth
-cross-check are described in `dev/dispatch-sketch/README.md`.
+`chromcov coverage --write` archives each run under `runs/<name>/` with a
+provenance sidecar; `chromcov collate` compares them. The mosdepth cross-check
+backend (`--backend mosdepth`) needs the binary on PATH.
 
 ## What it computes
 
@@ -63,30 +70,27 @@ finite-difference algorithm that costs O(reads), not O(bases).
 ```
 CoverageConfig ──► preflight (validate.py)   sorted? indexed? reference matches?
        │
-       ├──► dispatch.run_coverage ──► native.py  ─┐  both emit
-       │                          └► mosdepth.py ─┴► list[ChromCoverage]
-       │                                              └► output.py (run dir + provenance)
+       ├──► dispatch.run_coverage ──► NativeBackend  ─┐  both emit
+       │                          └► MosdepthBackend ─┴► list[ChromCoverage]
+       │                                                  └► RunStore (run dir + provenance)
        │
-       └──► analyze.py (native per-base, one memory-bounded pass per chrom):
-                 calc_cov(per_base=True) ──► per-base depth vector
-                     ├─ analysis.depth_histogram ─► stats / MAD / breadth
-                     ├─ analysis.windowed_means  ─► windows ─► plots, copy number
-                     ├─ strata.stratum_mask      ─► per-tier callable coverage
-                     ├─ qc.chrom_flags           ─► abnormality flags
-                     └─ analysis.rle_intervals   ─► optional per-base bedgraph
+       └──► CoverageAnalysis (native per-base, one memory-bounded pass per chrom):
+                 calc_cov(per_base=True) ──► ChromDepth(per-base depth vector)
+                     ├─ .histogram()      ─► stats / MAD / breadth
+                     ├─ .windowed_means() ─► windows ─► plots, copy number
+                     ├─ Strata.mask()     ─► per-tier callable coverage
+                     ├─ qc.chrom_flags    ─► abnormality flags
+                     └─ .rle_intervals()  ─► optional per-base bedgraph
 ```
 
 ## Repo layout
 
 | Path | What |
 |---|---|
-| `chromcov/` | the installable package (**in-progress** — see `TODO.md`) |
-| `dev/dispatch-sketch/` | the working reference implementation (runnable sketches) |
-| `dev/reproducibility-sketch/` | provenance, CWL tool, Dockerfile |
+| `chromcov/` | the installable package (config, backends, analysis, CLI) |
+| `tests/` | unit tests (reduction/QC math) + native↔mosdepth cross-check |
+| `config.example.yml` | annotated run-config driving `--config` |
+| `dev/reproducibility-sketch/` | CWL tool + Dockerfile (call `chromcov coverage`) |
 | `dev/CONTEXT.md` | the assignment brief |
 | `DEVELOPMENT.md` | algorithm + design deep dive |
 | `TODO.md` | what remains to make this a finished, sendable repo |
-
-> **Current state, honestly:** the polished code lives as runnable *sketches*
-> under `dev/dispatch-sketch/`. Consolidating them into the installable
-> `chromcov` package with a CLI, real tests, and CI is the top of `TODO.md`.

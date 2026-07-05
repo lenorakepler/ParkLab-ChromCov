@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-import analysis
+from .analysis import ChromStats, is_autosome
 
 
 @dataclass
@@ -28,10 +28,10 @@ class QCThresholds:
     extreme_median_mult: float = 5.0  # median > mult * baseline -> EXTREME_DEPTH (artifact/mito)
 
 
-def chrom_flags(chrom: str, stats: analysis.ChromStats, cn: float,
+def chrom_flags(chrom: str, stats: ChromStats, cn: float,
                 baseline: float, thr: QCThresholds = QCThresholds()) -> list[str]:
     flags: list[str] = []
-    autosome = analysis.is_autosome(chrom)
+    autosome = is_autosome(chrom)
 
     # Copy number
     if cn <= thr.depleted_cn:

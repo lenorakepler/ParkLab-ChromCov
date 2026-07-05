@@ -7,7 +7,6 @@ styling is decoupled from the expensive coverage pass.
                         CNV breakpoints show up as step changes between windows.
 
 matplotlib is imported with the Agg backend so this runs headless (CI, servers).
-Run with `uv run --with matplotlib ...`.
 """
 from __future__ import annotations
 

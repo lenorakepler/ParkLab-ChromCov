@@ -7,26 +7,24 @@ over M/=/X CIGAR ops (D/N gaps excluded), no overlapping-mate correction, and
 CoverageConfig, any disagreement is a real bug in one of them, which is exactly
 what makes running both worthwhile.
 
-Run (pytest isn't a project dependency):
+Run (pytest is in the `dev` extra):
 
-    uv run --with pytest pytest dev/dispatch-sketch/test_backends.py -v
+    uv run --extra dev pytest tests/test_backends.py -v
 
 Skips cleanly when mosdepth or the data/ CRAM aren't present, so it's safe in CI
 on a machine without either.
 """
 from __future__ import annotations
+
 import shutil
-import sys
 from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+from chromcov import dispatch
+from chromcov.config import CoverageConfig
 
-from config import CoverageConfig
-import dispatch
-
-_REPO_ROOT = Path(__file__).resolve().parents[2]
+_REPO_ROOT = Path(__file__).resolve().parents[1]
 _DATA = _REPO_ROOT / "data"
 _CRAM = _DATA / "COLO829T_TEST.cram"
 _REF = _DATA / "GCA_000001405.15_GRCh38_no_alt_analysis_set.fa"

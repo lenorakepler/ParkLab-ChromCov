@@ -22,6 +22,7 @@ Both backends benefit: mosdepth needs sorted+indexed+correct-reference too.
 from __future__ import annotations
 
 import hashlib
+import sys
 from pathlib import Path
 
 import pysam
@@ -118,5 +119,6 @@ def preflight(config, verify_reference: str = "auto") -> dict:
     reference = check_reference(config, verify_reference)
     report = {"sorted": True, "index": str(config.index), "reference_check": reference}
     if reference["status"] == "warn":
-        print(f"[preflight] WARNING: {reference['message']}")
+        # stderr so the coverage table on stdout stays clean/pipeable.
+        print(f"[preflight] WARNING: {reference['message']}", file=sys.stderr)
     return report
