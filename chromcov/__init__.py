@@ -14,6 +14,7 @@ from .backends import CoverageBackend, MosdepthBackend, NativeBackend, get_backe
 from .config import AnalysisConfig, CoverageConfig
 from .dispatch import run_coverage
 from .output import RunStore
+from .perbase import PerBaseStore
 from .pipeline import CoverageAnalysis
 from .qc import QCThresholds
 from .result import ChromCoverage
@@ -33,5 +34,6 @@ __all__ = [
     "ChromStats",
     "Strata",
     "RunStore",
+    "PerBaseStore",
     "QCThresholds",
 ]

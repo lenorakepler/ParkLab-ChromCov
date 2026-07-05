@@ -16,6 +16,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
+    "snakemake>=8.0",
 ]
 
 [project.scripts]

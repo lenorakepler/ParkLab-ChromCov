@@ -116,14 +116,17 @@ def cram_reference_ids(cram_path: str | Path, reference_path: str | Path) -> dic
     except ImportError:
         return {"available": False, "reason": "pysam not importable"}
 
-    af = pysam.AlignmentFile(
-        str(cram_path), "rc", reference_filename=str(reference_path)
-    )
-    seqs = [
-        {"name": sq["SN"], "length": sq["LN"], "M5": sq.get("M5"), "UR": sq.get("UR")}
-        for sq in af.header.to_dict().get("SQ", [])
-    ]
-    af.close()
+    try:
+        af = pysam.AlignmentFile(
+            str(cram_path), "rc", reference_filename=str(reference_path)
+        )
+        seqs = [
+            {"name": sq["SN"], "length": sq["LN"], "M5": sq.get("M5"), "UR": sq.get("UR")}
+            for sq in af.header.to_dict().get("SQ", [])
+        ]
+        af.close()
+    except Exception as e:  # never let provenance capture crash a run
+        return {"available": False, "reason": f"could not read CRAM header: {e}"}
     return {"available": True, "reference_path": str(reference_path), "sequences": seqs}
 
 

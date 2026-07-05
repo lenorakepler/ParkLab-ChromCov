@@ -16,7 +16,6 @@ Because it already does the full per-base pass, `analyze` is a *superset* of
 from __future__ import annotations
 
 import csv
-import gzip
 from pathlib import Path
 
 import numpy as np
@@ -66,6 +65,10 @@ class CoverageAnalysis:
         self.strata_bp: dict[str, int] = {label: 0 for label in self.strata.labels()}
         self.easy_autosomal_hist: np.ndarray | None = None
 
+        # --- per-base track reuse bookkeeping ---
+        self.track_hits: list[str] = []      # chroms read back from stored tracks
+        self.track_misses: list[str] = []    # chroms computed fresh from the CRAM
+
         # --- results (filled by finalize) ---
         self.stats_rows: list[dict] = []
         self.flagged: list[tuple[str, list[str]]] = []
@@ -74,40 +77,90 @@ class CoverageAnalysis:
 
     # --- driving the pass --------------------------------------------------
 
-    def run(self, chroms: list[str] | None = None, per_base_path: Path | None = None) -> dict:
-        """Preflight, open the CRAM, loop chromosomes, finalize. Returns the
-        preflight report. Whole genome (contig globs) unless `chroms` is given."""
-        report = validate.preflight(self.config)
+    def run(self, chroms: list[str] | None = None, store=None,
+            write_tracks: bool = False) -> dict:
+        """Preflight, loop chromosomes, finalize. Returns the preflight report.
+        Whole genome (contig globs) unless `chroms` is given.
 
-        rf = ReadFilter(
-            include_flags=self.config.include_flags,
-            exclude_flags=self.config.exclude_flags,
-            exclude_all_flags=self.config.exclude_all_flags,
-            min_mapping_quality=self.config.min_mapping_quality,
-        )
-        cram = pysam.AlignmentFile(
-            str(self.config.cram), "rc",
-            reference_filename=str(self.config.reference),
-            index_filename=str(self.config.index),
-        )
-        self.chroms = list(chroms) if chroms else self.config.select_contigs(cram.references)
+        Per-chromosome per-base depth comes from `store` (a PerBaseStore) when a
+        track exists there, else it's computed from the CRAM; with `write_tracks`
+        a freshly computed chromosome is written back as a track output. If every
+        requested chromosome is already in the store, the CRAM is never opened
+        (lengths come from the store sidecar), so analysis can run without it."""
+        cram_available = Path(self.config.cram).exists()
+        cram = rf = None
+        lengths: dict[str, int] = {}
 
-        perbase_fh = gzip.open(per_base_path, "wt") if per_base_path else None
+        if cram_available:
+            report = validate.preflight(self.config)
+            rf = ReadFilter(
+                include_flags=self.config.include_flags,
+                exclude_flags=self.config.exclude_flags,
+                exclude_all_flags=self.config.exclude_all_flags,
+                min_mapping_quality=self.config.min_mapping_quality,
+            )
+            cram = pysam.AlignmentFile(
+                str(self.config.cram), "rc",
+                reference_filename=str(self.config.reference),
+                index_filename=str(self.config.index),
+            )
+            self.chroms = list(chroms) if chroms else self.config.select_contigs(cram.references)
+            lengths = {c: cram.get_reference_length(c) for c in self.chroms}
+        else:
+            if store is None or not store.exists():
+                raise RuntimeError(
+                    "CRAM not found and no per-base tracks to read from: "
+                    f"{self.config.cram}"
+                )
+            report = {"reference_check": {"status": "reused per-base tracks (no CRAM)"}}
+            summary = store.read_summary()
+            self.chroms = list(chroms) if chroms else store.chroms()
+            lengths = {c: summary[c]["length"] for c in self.chroms if c in summary}
+
         try:
             for chrom in self.chroms:
-                self.process_chrom(cram, rf, chrom, perbase_fh)
+                length = lengths.get(chrom) or (cram.get_reference_length(chrom) if cram else None)
+                if length is None:
+                    raise RuntimeError(f"cannot determine length of {chrom!r} (not in CRAM or tracks)")
+                self.process_chrom(chrom, length, cram=cram, rf=rf,
+                                   store=store, write_tracks=write_tracks)
         finally:
-            if perbase_fh is not None:
-                perbase_fh.close()
+            if cram is not None:
+                cram.close()
+
+        # Refresh the track sidecar with whatever chromosomes we now have (merging
+        # with any already recorded, so a subset run doesn't drop other chroms).
+        if store is not None and write_tracks:
+            merged = {**store.read_summary(), **{
+                c: {"length": self.lengths[c], "bases": self.bases[c],
+                    "mean": round(self.per_chrom_stats[c].mean, 4)}
+                for c in self.chroms
+            }}
+            store.write_sidecar(merged)
 
         self.finalize()
         return report
 
-    def process_chrom(self, cram, rf: ReadFilter, chrom: str, perbase_fh=None) -> None:
+    def process_chrom(self, chrom: str, length: int, cram=None, rf: ReadFilter | None = None,
+                      store=None, write_tracks: bool = False) -> None:
         """Reduce one chromosome to hist + windows (+ strata), accumulate pooled
-        histograms, then drop the per-base vector."""
-        base_depth, total_depth, _ = calc_cov(cram, chrom, rf, per_base=True)
-        length = cram.get_reference_length(chrom)
+        histograms, then drop the per-base vector. Per-base depth is loaded from
+        `store` when present, else computed from the CRAM."""
+        from_store = store is not None and store.has(chrom)
+        if from_store:
+            base_depth = store.load(chrom, length)
+            total_depth = int(base_depth.sum())
+            self.track_hits.append(chrom)
+        else:
+            if cram is None:
+                raise RuntimeError(
+                    f"chromosome {chrom!r} is not in the per-base tracks and no CRAM "
+                    "is available to compute it"
+                )
+            base_depth, total_depth, _ = calc_cov(cram, chrom, rf, per_base=True)
+            total_depth = int(total_depth)
+            self.track_misses.append(chrom)
+
         depth = ChromDepth(base_depth, cap=self.acfg.hist_cap)
 
         hist = depth.histogram()
@@ -142,9 +195,10 @@ class CoverageAnalysis:
         for s, e, m, f in zip(starts.tolist(), ends.tolist(), means.tolist(), ef.tolist()):
             self.win_rows.append({"chrom": chrom, "start": s, "end": e, "mean": m, "easy_frac": f})
 
-        if perbase_fh is not None:
-            for s, e, d in depth.rle_intervals(skip_zero=True):
-                perbase_fh.write(f"{chrom}\t{s}\t{e}\t{d}\n")
+        # Persist the per-base depth as a track output (only when freshly computed
+        # and asked to); a reused track is already on disk.
+        if store is not None and write_tracks and not from_store:
+            store.store(chrom, depth)
 
         del base_depth  # free the big vector before the next chromosome
 
@@ -209,9 +263,10 @@ class CoverageAnalysis:
 
     # --- writing outputs ---------------------------------------------------
 
-    def write_outputs(self, outdir: Path, per_base: bool = False) -> dict[str, Path]:
+    def write_outputs(self, outdir: Path) -> dict[str, Path]:
         """Write the coverage table, stats, windows, (strata), and plots under
-        `outdir`. Returns a map of logical name -> path written."""
+        `outdir` (a Level-2 analysis run). The per-base tracks are a separate
+        Level-1 output (see PerBaseStore). Returns a map of name -> path."""
         outdir = Path(outdir)
         outdir.mkdir(parents=True, exist_ok=True)
         written: dict[str, Path] = {}
@@ -245,9 +300,6 @@ class CoverageAnalysis:
             plots.scatter_windows(self.win_rows, scatter, baseline=baseline,
                                   ploidy=self.acfg.ploidy, min_easy_frac=min_easy)
             written["scatter"] = scatter
-
-        if per_base:
-            written["per_base"] = outdir / "coverage.perbase.bedgraph.gz"
 
         return written
 
@@ -286,7 +338,11 @@ class CoverageAnalysis:
     def summary_lines(self) -> list[str]:
         """Human-readable run summary (baseline, flagged chroms, focal counts)."""
         baseline, source = self.baseline()
-        lines = [f"diploid baseline ({source}): {baseline:.2f}x"]
+        lines = []
+        if self.track_hits:
+            lines.append(f"per-base tracks reused: {len(self.track_hits)}/{len(self.chroms)} "
+                         f"chrom(s) ({len(self.track_misses)} computed from CRAM)")
+        lines.append(f"diploid baseline ({source}): {baseline:.2f}x")
         if self.flagged:
             lines.append("abnormalities flagged:")
             lines += [f"  {chrom}: {';'.join(fl)}" for chrom, fl in self.flagged]

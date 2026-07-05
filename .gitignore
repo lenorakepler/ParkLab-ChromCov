@@ -186,5 +186,9 @@ data/
 out/
 runs/
 
+# snakemake bookkeeping + atomic-write temp files
+.snakemake/
+*.part
+
 # macOS
 .DS_Store

@@ -52,6 +52,36 @@ chromcov analyze --cram data/COLO829T_TEST.cram \
 provenance sidecar; `chromcov collate` compares them. The mosdepth cross-check
 backend (`--backend mosdepth`) needs the binary on PATH.
 
+## Compute once, analyze many (per-base tracks + reuse)
+
+Coverage is expensive; re-deriving stats/strata/plots from it is cheap. So the
+per-base depth is a first-class, interoperable **output** (a standard
+`bedgraph.gz`, one per chromosome), not a hidden cache — see `WORKFLOW.md` for
+the diagram. Three levels, each content-addressed:
+
+```bash
+chromcov fetch strata                    # download the SMaHT easy/difficult/extreme BEDs
+
+# 1st analyze --per-base writes per-base tracks (Level 1) under out/perbase/<coverage-key>/
+chromcov analyze --cram … --reference … --chroms chr20,chr21,chrX,chrY,chrM --per-base
+
+# a 2nd analyze REUSES those tracks (no CRAM recompute) and writes a separate
+# hashed run dir, so stratified-vs-not is a fast comparison off the same coverage
+chromcov analyze --cram … --reference … --chroms chr20,chr21,chrX,chrY,chrM \
+  --strata easy=data/SMaHT_easy_hg38.bed.gz,difficult=data/SMaHT_difficult_hg38.bed.gz,extreme=data/SMaHT_extreme_hg38.bed.gz
+```
+
+The Level-1 key hashes *inputs + read-filter params* only, so changing `--window`
+or `--strata` reuses the tracks and re-runs just the cheap reductions. Each
+analysis lands in `out/analysis/<analysis-key>/` with a `run.json` sidecar.
+
+The same steps run under **Snakemake** (scatter one track per chromosome, gather
+into one analysis; free parallelism + resume):
+
+```bash
+uv run snakemake --cores 4 --configfile config/config.example.yaml        # -n for a dry-run DAG
+```
+
 ## What it computes
 
 **Core (the deliverable):** per-chromosome mean coverage, via an event-based
@@ -87,9 +117,11 @@ CoverageConfig ──► preflight (validate.py)   sorted? indexed? reference ma
 
 | Path | What |
 |---|---|
-| `chromcov/` | the installable package (config, backends, analysis, CLI) |
-| `tests/` | unit tests (reduction/QC math) + native↔mosdepth cross-check |
-| `config.example.yml` | annotated run-config driving `--config` |
+| `chromcov/` | the installable package (config, backends, analysis, per-base tracks, CLI) |
+| `tests/` | unit tests (reduction/QC math, track round-trip) + native↔mosdepth cross-check |
+| `WORKFLOW.md` | mermaid diagrams of the three-level workflow + orchestration layers |
+| `workflow/Snakefile`, `config/` | Snakemake orchestration layer + example config |
+| `config.example.yml` | annotated run-config driving `chromcov --config` |
 | `dev/reproducibility-sketch/` | CWL tool + Dockerfile (call `chromcov coverage`) |
 | `dev/CONTEXT.md` | the assignment brief |
 | `DEVELOPMENT.md` | algorithm + design deep dive |

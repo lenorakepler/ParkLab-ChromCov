@@ -1,0 +1,74 @@
+# chromcov Snakemake workflow — the orchestration layer over the CLI.
+#
+# Scatter/gather across chromosomes:
+#   rule perbase   (scatter) -> one per-base depth track per chromosome
+#   rule analyze   (gather)  -> reuse every track -> one Level-2 analysis run
+#
+# The engine's job is exactly the "trickle-down" reuse: it skips any track whose
+# output file already exists and resumes from there. We import chromcov to
+# compute the SAME deterministic content-addressed keys the CLI uses, so the
+# rules' output paths land on the exact per-base / analysis directories the tool
+# would write itself -- the built-in reuse and the engine agree on where things go.
+#
+# Run:
+#   uv run snakemake --cores 4 --configfile config/config.example.yaml
+#   uv run snakemake --cores 4 --configfile config/config.example.yaml -n   # dry-run (see the DAG)
+from pathlib import Path
+
+from chromcov.config import AnalysisConfig, CoverageConfig
+from chromcov.perbase import PerBaseStore, analysis_key, analysis_slug
+
+# --- config ---------------------------------------------------------------
+CRAM = config["cram"]
+REFERENCE = config["reference"]
+CHROMS = config["chroms"]                     # list of contig names
+MIN_MAPQ = int(config.get("min_mapq", 0))
+WINDOW = int(config.get("window", 10_000))
+STRATA = config.get("strata", {}) or {}       # {label: bed path}
+OUTDIR = Path(config.get("outdir", "out"))
+PERBASE_ROOT = OUTDIR / "perbase"
+
+# --- derive the content-addressed keys (single source of truth: chromcov) --
+_cfg = CoverageConfig(cram=CRAM, reference=REFERENCE, min_mapping_quality=MIN_MAPQ)
+_store = PerBaseStore(PERBASE_ROOT, _cfg)
+_acfg = AnalysisConfig(window=WINDOW, strata=STRATA)
+_labels = sorted(STRATA)
+_akey = analysis_key(_store.key, _acfg, _labels)
+RUN_DIR = OUTDIR / "analysis" / analysis_slug(_acfg, _labels, _akey)
+
+
+def track(chrom):
+    return str(_store.track_path(chrom))
+
+
+# --- rules ----------------------------------------------------------------
+rule all:
+    input:
+        str(RUN_DIR / "run.json"),
+
+
+rule perbase:
+    """Scatter: compute one chromosome's per-base depth track (Level 1)."""
+    output:
+        track("{chrom}"),
+    shell:
+        "chromcov perbase --cram {CRAM} --reference {REFERENCE} "
+        "--min-mapq {MIN_MAPQ} --chrom {wildcards.chrom} --perbase-root " + str(PERBASE_ROOT)
+
+
+rule analyze:
+    """Gather: reuse every per-base track -> one Level-2 analysis run."""
+    input:
+        [track(c) for c in CHROMS],
+    output:
+        str(RUN_DIR / "run.json"),
+    params:
+        chroms=",".join(CHROMS),
+        strata=",".join(f"{k}={v}" for k, v in STRATA.items()),
+    run:
+        strata_opt = f"--strata {params.strata}" if params.strata else ""
+        shell(
+            "chromcov analyze --cram {CRAM} --reference {REFERENCE} "
+            "--min-mapq {MIN_MAPQ} --chroms {params.chroms} --window {WINDOW} "
+            f"{strata_opt} --per-base --perbase-root {PERBASE_ROOT} --outdir {OUTDIR}"
+        )

@@ -16,13 +16,16 @@ as `baseCommand: [chromcov, coverage]` with `--cram --reference --min-mapq
 """
 from __future__ import annotations
 
+import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 import click
 
-from . import dispatch
+from . import dispatch, fetch, provenance
 from .config import AnalysisConfig, CoverageConfig
 from .output import RunStore
+from .perbase import PerBaseStore, analysis_key, analysis_slug, build_track
 from .pipeline import CoverageAnalysis
 from .result import TSV_COLUMNS, write_tsv
 from .strata import Strata
@@ -120,6 +123,35 @@ def coverage(cram, reference, index, min_mapq, config, backend, chroms,
         click.echo(f"wrote {run_dir}/coverage.tsv (+ .provenance.json)", err=True)
 
 
+def _write_run_sidecar(path, store, acfg, analysis, labels, akey, chrom_list) -> None:
+    """run.json for a Level-2 analysis run: what params produced it + the
+    coverage-key (Level-1 tracks) it derived from."""
+    baseline, source = analysis.baseline()
+    record = {
+        "schema": "chromcov.analysis-run/1",
+        "generated_utc": datetime.now(timezone.utc).isoformat(),
+        "tool": provenance.tool_version(),
+        "code": provenance.git_provenance(),
+        "analysis_key": akey,
+        "coverage_key": store.key,
+        "perbase_dir": str(store.dir),
+        "params": {
+            "window": acfg.window,
+            "baseline": acfg.baseline,
+            "ploidy": acfg.ploidy,
+            "hist_cap": acfg.hist_cap,
+            "breadth_thresholds": list(acfg.breadth_thresholds),
+            "strata": labels,
+            "min_mapping_quality": store.config.min_mapping_quality,
+            "chroms": chrom_list or "all",
+        },
+        "chromosomes": analysis.chroms,
+        "baseline": {"value": round(baseline, 4), "source": source},
+        "flagged": {c: fl for c, fl in analysis.flagged},
+    }
+    Path(path).write_text(json.dumps(record, indent=2, sort_keys=True))
+
+
 @main.command()
 @input_options
 @click.option("--chroms", default=None, help="comma-separated contig subset (default: whole genome)")
@@ -128,12 +160,16 @@ def coverage(cram, reference, index, min_mapq, config, backend, chroms,
               help="callability strata as label=bed[,label=bed]; e.g. "
                    "easy=SMaHT_easy_hg38.bed.gz,difficult=...,extreme=...")
 @click.option("--per-base", "per_base", is_flag=True,
-              help="also write the RLE per-base bedgraph.gz (bulky on WGS)")
+              help="write per-base depth tracks (Level 1) so later runs reuse them")
+@click.option("--perbase-root", "perbase_root", type=click.Path(file_okay=False), default=None,
+              help="per-base track store root (default: <outdir>/perbase)")
 @click.option("--outdir", type=click.Path(file_okay=False), default=None,
-              help="output directory (default: ./out)")
+              help="output directory root (default: ./out)")
 def analyze(cram, reference, index, min_mapq, config, chroms, window,
-            strata, per_base, outdir) -> None:
-    """Full QC suite: stats, windows, strata, plots (+ the coverage table)."""
+            strata, per_base, perbase_root, outdir) -> None:
+    """Full QC suite (Level 2): stats, windows, strata, plots (+ the coverage
+    table), reusing per-base tracks when present. Writes to a hashed run dir so
+    runs (e.g. stratified vs not) accumulate for comparison."""
     cfg = _build_coverage_config(cram, reference, index, min_mapq, config)
 
     acfg = AnalysisConfig.from_yaml(config) if config else AnalysisConfig()
@@ -144,25 +180,50 @@ def analyze(cram, reference, index, min_mapq, config, chroms, window,
     if per_base:
         acfg.per_base = True
 
-    strata_obj = Strata.from_arg(strata) if strata else Strata.from_arg(acfg.strata)
+    root = Path(perbase_root).expanduser().resolve() if perbase_root else acfg.outdir / "perbase"
+    store = PerBaseStore(root, cfg)
 
+    strata_obj = Strata.from_arg(strata) if strata else Strata.from_arg(acfg.strata)
     analysis = CoverageAnalysis(cfg, acfg, strata_obj)
-    out = acfg.outdir
-    out.mkdir(parents=True, exist_ok=True)
 
     chrom_list = chroms.split(",") if chroms else None
-    per_base_path = out / "coverage.perbase.bedgraph.gz" if acfg.per_base else None
+    report = analysis.run(chroms=chrom_list, store=store, write_tracks=acfg.per_base)
+    click.echo(f"[preflight] {report['reference_check']['status']}", err=True)
 
-    report = analysis.run(chroms=chrom_list, per_base_path=per_base_path)
-    click.echo(f"[preflight] ok: sorted, indexed, reference {report['reference_check']['status']}",
-               err=True)
+    labels = strata_obj.labels()
+    akey = analysis_key(store.key, acfg, labels)
+    run_dir = acfg.outdir / "analysis" / analysis_slug(acfg, labels, akey)
+    run_dir.mkdir(parents=True, exist_ok=True)
+    written = analysis.write_outputs(run_dir)
+    _write_run_sidecar(run_dir / "run.json", store, acfg, analysis, labels, akey, chrom_list)
 
-    written = analysis.write_outputs(out, per_base=acfg.per_base)
     for line in analysis.summary_lines():
         click.echo(line, err=True)
-    click.echo(f"wrote {len(written)} outputs to {out}/", err=True)
+    if acfg.per_base:
+        click.echo(f"per-base tracks (Level 1): {store.dir}", err=True)
+    click.echo(f"analysis run (Level 2): {run_dir}", err=True)
     for name, path in written.items():
         click.echo(f"  {name}: {path.name}", err=True)
+
+
+@main.command()
+@input_options
+@click.option("--chrom", required=True, help="the single chromosome to compute a track for")
+@click.option("--perbase-root", "perbase_root", type=click.Path(file_okay=False), default="out/perbase",
+              help="per-base track store root (default: out/perbase)")
+def perbase(cram, reference, index, min_mapq, config, chrom, perbase_root) -> None:
+    """Compute + store ONE chromosome's per-base depth track (Level 1).
+
+    The Snakemake scatter unit; a no-op if the track already exists. Finalize the
+    coverage.json sidecar by running `analyze --per-base` (the gather step)."""
+    cfg = _build_coverage_config(cram, reference, index, min_mapq, config, per_base=True)
+    store = PerBaseStore(Path(perbase_root).expanduser().resolve(), cfg)
+    if store.has(chrom):
+        click.echo(f"track exists (skip): {store.track_path(chrom)}", err=True)
+        return
+    summary = build_track(cfg, chrom, store)
+    click.echo(f"wrote {store.track_path(chrom)}  "
+               f"(mean {summary['mean']}x over {summary['length']:,} bp)", err=True)
 
 
 @main.command()
@@ -186,6 +247,21 @@ def collate(runs_dir) -> None:
                                                          "exclude_flags") if k in r})
     for rid, params in seen.items():
         click.echo(f"# {rid}: {params}")
+
+
+@main.group(name="fetch")
+def fetch_group() -> None:
+    """Download inputs a clean clone needs (callability strata, ...)."""
+
+
+@fetch_group.command(name="strata")
+@click.option("--dest", type=click.Path(file_okay=False), default="data",
+              help="directory to download into (default: ./data)")
+@click.option("--force", is_flag=True, help="re-download even if the files exist")
+def fetch_strata_cmd(dest, force) -> None:
+    """Download the Park Lab SMaHT easy/difficult/extreme hg38 BEDs."""
+    paths = fetch.fetch_strata(dest, force=force)
+    click.echo("\nuse them with:\n  chromcov analyze ... --strata " + fetch.strata_arg(paths))
 
 
 if __name__ == "__main__":

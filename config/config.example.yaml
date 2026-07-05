@@ -1,0 +1,28 @@
+# Example config for the chromcov Snakemake workflow.
+#   uv run snakemake --cores 4 --configfile config/config.example.yaml
+#
+# Snakemake scatters `perbase` over `chroms` (one per-base track each), then
+# gathers into a single `analyze` run. Re-running skips tracks already on disk.
+
+cram: data/COLO829T_TEST.cram
+reference: data/GCA_000001405.15_GRCh38_no_alt_analysis_set.fa
+
+# Chromosomes to process (the scatter set).
+chroms:
+  - chr20
+  - chr21
+  - chr22
+  - chrX
+  - chrY
+  - chrM
+
+min_mapq: 0
+window: 10000
+outdir: out
+
+# Callability strata (fetch with `chromcov fetch strata`). Comment out for an
+# unstratified run.
+strata:
+  easy: data/SMaHT_easy_hg38.bed.gz
+  difficult: data/SMaHT_difficult_hg38.bed.gz
+  extreme: data/SMaHT_extreme_hg38.bed.gz
