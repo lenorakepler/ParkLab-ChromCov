@@ -91,6 +91,11 @@ into one full run; free parallelism + resume):
 uv run snakemake --cores 4 --configfile config/config.example.yaml        # -n for a dry-run DAG
 ```
 
+**Compare runs (Level 3):** `chromcov collate --metric copy_number` pivots any
+metric across the analysis runs under `out/` to a chrom × run table, so
+stratified-vs-not sits side by side (mean is identical — it's coverage-level —
+while copy number shifts with the baseline).
+
 ## What it computes
 
 **Core (the deliverable):** per-chromosome mean coverage, via an event-based

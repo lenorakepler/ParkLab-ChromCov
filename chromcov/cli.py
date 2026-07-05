@@ -26,6 +26,7 @@ from pathlib import Path
 import click
 from pydantic import ValidationError
 
+from . import collate as collate_mod
 from . import dispatch, fetch, provenance
 from .config import RunConfig
 from .output import RunStore
@@ -239,26 +240,50 @@ def perbase(cram, reference, index, min_mapq, config, chrom, outdir) -> None:
 
 
 @main.command()
+@click.option("--outdir", type=click.Path(file_okay=False), default="out",
+              help="output root holding analysis runs (default: out)")
+@click.option("--metric", type=click.Choice(list(collate_mod.METRICS)), default="copy_number",
+              help="which coverage.tsv column to compare across runs")
+@click.option("--archives", is_flag=True,
+              help="instead compare the `coverage --write` archives under --runs-dir")
 @click.option("--runs-dir", "runs_dir", type=click.Path(file_okay=False), default=None,
-              help="archive directory (default: ./runs)")
-def collate(runs_dir) -> None:
-    """Compare archived runs (wide chrom x run table)."""
-    store = RunStore(_resolve(runs_dir) or Path("runs"))
-    long_rows = store.collate()
-    if not long_rows:
-        click.echo(f"no runs under {store.runs_dir} yet (use `coverage --write`).")
+              help="archive directory for --archives (default: ./runs)")
+def collate(outdir, metric, archives, runs_dir) -> None:
+    """Compare runs as a wide chrom x run table (Level 3).
+
+    By default compares the analysis runs under --outdir
+    (out/<coverage-key>/<analysis-key>/): pick a --metric to pivot. Runs off the
+    same coverage-key share the per-base stats, so `copy_number` (its baseline
+    shifts with --strata) is the informative default. `--archives` instead
+    compares the mean-only `coverage --write` archives under runs/."""
+    if archives:
+        store = RunStore(_resolve(runs_dir) or Path("runs"))
+        long_rows = store.collate()
+        if not long_rows:
+            click.echo(f"no archives under {store.runs_dir} yet (use `coverage --write`).")
+            return
+        run_ids, table = store.pivot_mean(long_rows)
+        click.echo("chrom\t" + "\t".join(run_ids))
+        for chrom, per_run in table.items():
+            click.echo(chrom + "\t" + "\t".join(str(per_run.get(rid, "")) for rid in run_ids))
         return
-    run_ids, table = store.pivot_mean(long_rows)
-    click.echo("chrom\t" + "\t".join(run_ids))
+
+    runs = collate_mod.find_runs(outdir)
+    if not runs:
+        click.echo(f"no analysis runs under {outdir}/ yet (run `chromcov coverage`).")
+        return
+    run_ids, table = collate_mod.pivot(runs, metric)
+    labels = {rid: f"r{i + 1}" for i, rid in enumerate(run_ids)}
+    click.echo(f"# metric: {metric}")
+    click.echo("chrom\t" + "\t".join(labels[r] for r in run_ids))
     for chrom, per_run in table.items():
-        click.echo(chrom + "\t" + "\t".join(str(per_run.get(rid, "")) for rid in run_ids))
-    click.echo("\n# run_id -> params")
-    seen: dict = {}
-    for r in long_rows:
-        seen.setdefault(r["run_id"], {k: r[k] for k in ("min_mapping_quality",
-                                                        "exclude_flags") if k in r})
-    for rid, params in seen.items():
-        click.echo(f"# {rid}: {params}")
+        click.echo(chrom + "\t" + "\t".join(str(per_run.get(r, "")) for r in run_ids))
+    click.echo("\n# run legend")
+    for r in runs:
+        p = r.params
+        strata = ",".join(p["strata"]) or "none"
+        click.echo(f"{labels[r.run_id]}\t{r.run_id}\t"
+                   f"window={p['window']} baseline={p['baseline']} strata={strata} mapq={p['min_mapq']}")
 
 
 @main.group(name="fetch")

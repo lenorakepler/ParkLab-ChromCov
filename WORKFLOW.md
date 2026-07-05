@@ -28,11 +28,10 @@ flowchart TD
 
     RED --> ANALYSIS[("Level 2 · analysis run (nested)<br/>out/&lt;coverage-key&gt;/&lt;analysis-key&gt;/<br/>coverage.tsv · windows · strata · plots + run.json<br/>key = coverage-key + analysis params")]:::out
 
-    ANALYSIS -.->|deferred| COLLATE["Level 3 · collate/compare runs<br/>(stratified vs not, ...)"]:::todo
+    ANALYSIS -->|chromcov collate| COLLATE["Level 3 · compare runs<br/>pivot a metric (e.g. copy_number)<br/>to chrom x run — stratified vs not"]:::out
 
     classDef in fill:#e8f0fe,stroke:#4c72b0,color:#000;
     classDef out fill:#e6f4ea,stroke:#34a853,color:#000;
-    classDef todo fill:#fef7e0,stroke:#f9ab00,stroke-dasharray:4 3,color:#000;
 ```
 
 **Why the keys differ per level.** The expensive step (per-base depth) depends only
