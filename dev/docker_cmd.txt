@@ -1,0 +1,1 @@
+docker run --platform linux/amd64 -v "$(pwd):/opt/mount" quay.io/biocontainers/mosdepth:0.3.3--h37c5b7d_2 mosdepth -n -t 4 --by 1000 --fasta /opt/mount/data/GCA_000001405.15_GRCh38_no_alt_analysis_set.fa /opt/mount/out/no_per_base/COLO829T_TEST /opt/mount/data/COLO829T_TEST.cram

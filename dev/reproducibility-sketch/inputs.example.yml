@@ -1,0 +1,10 @@
+# Example CWL job file. Paths are relative to this file.
+# `secondaryFiles` (.crai / .fai) are discovered automatically by the runner.
+cram:
+  class: File
+  path: ../../data/COLO829T_TEST.cram
+reference:
+  class: File
+  path: ../../data/GCA_000001405.15_GRCh38_no_alt_analysis_set.fa
+min_mapq: 0
+output_name: coverage.tsv
