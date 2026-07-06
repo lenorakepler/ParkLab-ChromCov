@@ -1,0 +1,72 @@
+# --- inputs ------------------------------------------------------------------
+inputs:
+  cram: data/COLO829T_TEST.cram
+  reference: data/GCA_000001405.15_GRCh38_no_alt_analysis_set.fa
+  index: data/COLO829T_TEST.cram.crai
+
+# --- read filtering (samtools flag/MAPQ semantics) ---------------------------
+filters:
+  # -Q
+  min_mapping_quality: 0
+
+  # -f: require that reads have ALL of these
+  include_flags: []
+
+  # -F: exclude reads that have ANY of these.
+  # NOTE: `duplicate` is deliberately NOT excluded by default -- in high-depth
+  # cancer data, coordinate collisions make duplicate-marking drop real coverage.
+  # Add `- duplicate` here to reproduce a standard dedup'd number.
+  exclude_flags:
+    - unmapped
+    - secondary
+    - qcfail
+    - supplementary
+
+  # -G: exclude reads ONLY if they have ALL of these
+  exclude_all_flags: []
+
+# --- contig selection --------------------------------------------------------
+# Glob patterns over reference names. include first, then exclude. Keeps the
+# decoy/unplaced artifact contigs out of the headline report (your note).
+contigs:
+  include: ["chr*"]
+  exclude: ["*_alt", "*_random", "chrUn*", "*_decoy", "HLA*", "chrEBV"]
+  # chrM is kept by default but flagged in reports because of high depth
+
+# --- analysis ----------------------------------------------------------------
+analysis:
+  window: 10000 # windowed-mean bin size (bp)
+  hist_cap: 200000 # clip extreme pileup depths into a top bin
+  breadth_thresholds: [1, 5, 10, 15, 20, 30]
+
+# --- copy number -------------------------------------------------------------
+copy_number:
+  ploidy: 2
+  baseline: easy-autosomal-median # easy-autosomal-median | autosomal-median
+  # 'easy-autosomal-median' uses the callability mask below -> repeat pileups
+  # don't inflate the CN=2 reference.
+
+# --- QC abnormality-flag thresholds ------------------------------------------
+# Tune when a chromosome/window is flagged. Set any subset; unset keys default.
+qc:
+  gain_cn: 2.5             # CN >= this (autosomes) -> CN_GAIN
+  loss_cn: 1.5             # CN <= this (autosomes) -> CN_LOSS
+  depleted_cn: 0.25        # CN <= this (any contig) -> CN_DEPLETED
+  min_median: 10.0         # median depth < this -> LOW_DEPTH
+  uneven_robust_cv: 0.5    # MAD/median > this -> UNEVEN
+  min_breadth_20x: 0.70    # breadth@20x < this -> LOW_CALLABLE
+  extreme_median_mult: 5.0 # median > this * baseline -> EXTREME_DEPTH
+
+# --- callability strata (Park Lab SMaHT_Regional_Categorization, GRCh38) ------
+strata:
+  easy: SMaHT_easy_hg38.bed.gz
+  difficult: SMaHT_difficult_hg38.bed.gz
+  extreme: SMaHT_extreme_hg38.bed.gz
+  scatter_min_easy_frac: 0.5 # drop windows mostly outside 'easy' from the scatter
+
+# --- output ------------------------------------------------------------------
+# `--full` writes per-base bedgraphs + the combined table + plots; the default
+# (no --full) prints just the mean-only per-chromosome table.
+output:
+  outdir: out
+  plots: true
