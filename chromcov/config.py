@@ -119,6 +119,33 @@ class QCThresholds(BaseModel):
     extreme_median_mult: float = 5.0  # median > this * baseline -> EXTREME_DEPTH
 
 
+# YAML (section, key) -> flat Config field. Nested in the file, flat on the model.
+# from_yaml forwards only the keys a YAML actually sets, so every default lives in
+# exactly one place -- the model -- and can't drift from a second copy in the loader.
+# (qc / strata / scatter_min_easy_frac are nested-dict cases handled in from_yaml.)
+_YAML_TO_FIELD = {
+    ("inputs", "cram"): "cram",
+    ("inputs", "reference"): "reference",
+    ("inputs", "index"): "index",
+    ("inputs", "verify_reference"): "verify_reference",
+    ("filters", "min_mapping_quality"): "min_mapping_quality",
+    ("filters", "include_flags"): "include_flags",
+    ("filters", "exclude_flags"): "exclude_flags",
+    ("filters", "exclude_all_flags"): "exclude_all_flags",
+    ("contigs", "chroms"): "chroms",
+    ("contigs", "include"): "include_contigs",
+    ("contigs", "exclude"): "exclude_contigs",
+    ("analysis", "window"): "window",
+    ("analysis", "hist_cap"): "hist_cap",
+    ("analysis", "breadth_thresholds"): "breadth_thresholds",
+    ("copy_number", "ploidy"): "ploidy",
+    ("copy_number", "baseline"): "baseline",
+    ("copy_number", "scatter_cap_cn"): "scatter_cap_cn",
+    ("output", "outdir"): "outdir",
+    ("output", "plots"): "plots",
+}
+
+
 class Config(BaseModel):
     """A whole run: coverage knobs + the extension knobs `--full` adds. Validated
     at construction (the CLI/YAML boundary)."""
@@ -129,6 +156,7 @@ class Config(BaseModel):
     cram: Path
     reference: Path
     index: Path | None = None            # defaults to <cram>.crai if None
+    verify_reference: Literal["auto", "full", "skip"] = "auto"  # preflight M5-check mode
 
     # --- contig selection ---
     # Optional explicit subset (None = all); else include-then-exclude globs over
@@ -154,6 +182,7 @@ class Config(BaseModel):
     # 0 -> scatter shows all windows colored by callability tier; >0 -> restrict
     # to callable ('easy') windows (the old callable-only view).
     scatter_min_easy_frac: float = 0.0
+    scatter_cap_cn: float = 6.0          # cap on approx copy number on the scatter y-axis
 
     # --- output ---
     outdir: Path = Path("out")
@@ -182,44 +211,32 @@ class Config(BaseModel):
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> dict:
-        """Flatten a run-config YAML (see config.example.yaml) into a dict of
-        `Config` field names. Returned as a dict (not a `Config`) so `load` can
-        layer CLI overrides on top before validating once."""
+        """Flatten a run-config YAML (see config.example.yaml) into a dict of only
+        the `Config` field names the file actually sets -- absent keys are omitted
+        so the model supplies the default (defaults live in one place: the model).
+        Returned as a dict (not a `Config`) so `load` can layer CLI overrides on top
+        before validating once. Type coercion (list->tuple, flag names->mask) is the
+        model's job, not this function's."""
         data = yaml.safe_load(Path(path).read_text()) or {}
-        inputs = data.get("inputs", {}) or {}
-        filters = data.get("filters", {}) or {}
-        contigs = data.get("contigs", {}) or {}
-        analysis = data.get("analysis", {}) or {}
-        copy_number = data.get("copy_number", {}) or {}
-        strata = dict(data.get("strata", {}) or {})
-        output = data.get("output", {}) or {}
-        scatter_min = strata.pop("scatter_min_easy_frac", 0.0)
 
-        payload: dict = {
-            "cram": inputs.get("cram"),
-            "reference": inputs.get("reference"),
-            "index": inputs.get("index"),
-            "min_mapping_quality": filters.get("min_mapping_quality", 0),
-            "include_flags": filters.get("include_flags", 0),
-            "exclude_flags": filters.get("exclude_flags", DEFAULT_EXCLUDE),
-            "exclude_all_flags": filters.get("exclude_all_flags", 0),
-            "window": analysis.get("window", 10_000),
-            "hist_cap": analysis.get("hist_cap", 200_000),
-            "breadth_thresholds": tuple(analysis.get("breadth_thresholds", (1, 5, 10, 15, 20, 30, 100, 200))),
-            "ploidy": copy_number.get("ploidy", 2),
-            "baseline": copy_number.get("baseline", "easy-autosomal-median"),
-            "qc": data.get("qc", {}) or {},     # partial dict -> QCThresholds (unset keys default)
-            "strata": strata,
-            "scatter_min_easy_frac": scatter_min,
-            "outdir": output.get("outdir", "out"),
-            "plots": output.get("plots", True),
-        }
-        if "include" in contigs:
-            payload["include_contigs"] = tuple(contigs["include"])
-        if "exclude" in contigs:
-            payload["exclude_contigs"] = tuple(contigs["exclude"])
-        # Drop keys the YAML didn't set, so model defaults apply.
-        return {k: v for k, v in payload.items() if v is not None}
+        payload: dict = {}
+        for (section, key), field in _YAML_TO_FIELD.items():
+            sec = data.get(section) or {}
+            if key in sec and sec[key] is not None:
+                payload[field] = sec[key]
+
+        # qc: a partial dict is fine -- QCThresholds fills the unset keys.
+        if data.get("qc"):
+            payload["qc"] = data["qc"]
+
+        # strata: the {label: path} map plus the scatter knob that lives beside it.
+        strata = dict(data.get("strata") or {})
+        if "scatter_min_easy_frac" in strata:
+            payload["scatter_min_easy_frac"] = strata.pop("scatter_min_easy_frac")
+        if strata:
+            payload["strata"] = strata
+
+        return payload
 
     @classmethod
     def load(cls, path: str | Path | None = None, overrides: dict | None = None) -> "Config":

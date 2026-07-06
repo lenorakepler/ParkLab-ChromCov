@@ -257,6 +257,26 @@ def plot(outdir) -> None:
         click.echo(f"  {name}: {path.name}", err=True)
 
 
+@main.command(name="gen-config")
+@click.option("--output", "-o", "output", type=click.Path(dir_okay=False),
+              default="config.yaml", help="path to write (default: ./config.yaml)")
+@click.option("--force", is_flag=True, help="overwrite if the file already exists")
+def gen_config_cmd(output, force) -> None:
+    """Write an editable run-config YAML pre-filled with every option at its
+    current default.
+
+    Values are read live from the Config model, so the generated file always
+    matches the code's defaults -- edit it and pass it back with `--config`."""
+    from .gen_config import write_default_config
+
+    path = Path(output)
+    if path.exists() and not force:
+        raise click.UsageError(f"{path} already exists; pass --force to overwrite")
+    write_default_config(path)
+    click.echo(f"wrote {path}")
+    click.echo(f"edit it, then: chromcov coverage --config {path}", err=True)
+
+
 @main.group(name="fetch")
 def fetch_group() -> None:
     """Download inputs a clean clone needs (callability strata, ...)."""

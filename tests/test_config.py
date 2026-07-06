@@ -5,15 +5,24 @@ contributes only overrides. These pin that precedence + the required-inputs rule
 import pytest
 import yaml
 
-from chromcov.config import Config
+from chromcov.config import Config, _YAML_TO_FIELD
 
 
-def _write_cfg(tmp_path, **sections):
+def test_every_config_field_is_loadable_from_yaml():
+    """Guard against the defaults drifting again: every model field must be
+    reachable through from_yaml -- either mapped in _YAML_TO_FIELD or one of the
+    nested-dict special cases. Add a Config field without wiring it -> this fails."""
+    special = {"qc", "strata", "scatter_min_easy_frac"}
+    assert set(Config.model_fields) == set(_YAML_TO_FIELD.values()) | special
+
+
+def _write_cfg(tmp_path, inputs_extra=None, **sections):
     cram = tmp_path / "x.cram"
     cram.write_bytes(b"c")
     ref = tmp_path / "r.fa"
     ref.write_bytes(b"r")
-    data = {"inputs": {"cram": str(cram), "reference": str(ref)}, **sections}
+    inputs = {"cram": str(cram), "reference": str(ref), **(inputs_extra or {})}
+    data = {"inputs": inputs, **sections}
     path = tmp_path / "run.yaml"
     path.write_text(yaml.safe_dump(data))
     return path
@@ -55,6 +64,25 @@ def test_default_index_derived_from_cram(tmp_path):
     ref.write_bytes(b"r")
     run = Config.load(None, overrides={"cram": str(cram), "reference": str(ref)})
     assert run.index == cram.with_suffix(".cram.crai")
+
+
+def test_chroms_from_config_file(tmp_path):
+    cfg = _write_cfg(tmp_path, contigs={"chroms": ["chr1", "chr2"]})
+    run = Config.load(cfg)
+    assert run.chroms == ("chr1", "chr2")   # explicit subset now settable in YAML
+    assert run.select_contigs(["chr1", "chr2", "chr3"]) == ["chr1", "chr2"]
+
+
+def test_verify_reference_from_config_file(tmp_path):
+    cfg = _write_cfg(tmp_path, inputs_extra={"verify_reference": "skip"})
+    run = Config.load(cfg)
+    assert run.verify_reference == "skip"
+
+
+def test_scatter_cap_cn_from_config_file(tmp_path):
+    cfg = _write_cfg(tmp_path, copy_number={"scatter_cap_cn": 4.0})
+    run = Config.load(cfg)
+    assert run.scatter_cap_cn == 4.0
 
 
 def test_qc_thresholds_from_yaml(tmp_path):

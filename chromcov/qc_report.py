@@ -252,7 +252,8 @@ class QCReport:
             min_easy = self.cfg.scatter_min_easy_frac if "easy" in self.strata_hist else 0.0
             scatter = outdir / "coverage.scatter.png"
             plots.scatter_windows(self.win_rows, scatter, baseline=baseline,
-                                  ploidy=self.cfg.ploidy, min_easy_frac=min_easy)
+                                  ploidy=self.cfg.ploidy, min_easy_frac=min_easy,
+                                  cap_cn=self.cfg.scatter_cap_cn)
             written["scatter"] = scatter
 
         return written

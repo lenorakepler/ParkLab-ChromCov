@@ -85,9 +85,13 @@ def check_reference(config, verify: str = "auto") -> dict:
             "checked": sum(1 for sn, m5 in cram_m5.items() if m5 and sn in ref_m5),
             "missing_m5": missing}
 
-def preflight(config, verify_reference: str = "auto") -> dict:
+def preflight(config, verify_reference: str | None = None) -> dict:
     """Run all checks. Raises PreflightError on hard failures; returns a report
-    (suitable for the provenance sidecar) on success/soft-warnings."""
+    (suitable for the provenance sidecar) on success/soft-warnings.
+
+    `verify_reference` (auto|full|skip) overrides the mode; None uses the run's
+    `config.verify_reference`."""
+    verify = verify_reference if verify_reference is not None else getattr(config, "verify_reference", "auto")
     for label, p in (("cram", config.cram), ("reference", config.reference), ("index", config.index)):
         if not Path(p).exists():
             hint = " (build with `samtools index`)" if label == "index" else ""
@@ -101,7 +105,7 @@ def preflight(config, verify_reference: str = "auto") -> dict:
             "the .crai require it. Run `samtools sort` (then re-index)."
         )
 
-    reference = check_reference(config, verify_reference)
+    reference = check_reference(config, verify)
     report = {"sorted": True, "index": str(config.index), "reference_check": reference}
     if reference["status"] == "warn":
         # stderr so the coverage table on stdout stays clean/pipeable.

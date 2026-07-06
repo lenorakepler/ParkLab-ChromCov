@@ -18,28 +18,33 @@ No `uv`? `pip install -e .` works too.
 
 By default, the the coverage calculation excludes unmapped, secondary, and supplementary reads. Since COLO829T is a cancer cell line, does not filter out duplicated reads. Overlapping mate pairs handled by the `pysam.AlignedSegment.get_blocks()`
 
+### Recommended options
+
+It is highly recommended to generate and use a config file. With this command, one can generate a config file that exposes all program defaults so that you can make sure it works as you are expecting and re-configure anything you need:
+
+```bash
+chromcov gen-config [-o config.yaml]
+```
+
 ### Quick, no-frills
 
 At its simplest, one can use program defaults and just point to the CRAM and reference files. The program will output per-chromosome mean coverage to stdout.
 
 ```bash
-# install the package and CLI
-uv sync
-
 chromcov coverage \
   --cram data/COLO829T_TEST.cram \
   --reference data/GCA_000001405.15_GRCh38_no_alt_analysis_set.fa
 
-# write it to a file instead
-chromcov coverage --cram … --reference … -o out/coverage.tsv
+# Or use default config
+chromcov coverage --config config.yaml
 ```
 
-### A little more fun (`--full`)
+### More-context QC (`--full`) -- a little more fun!
 
-For more context around the average-coverage number, run the program with `--full`
+For more context around the average-coverage number, run the program with `--full`. If analyzing the whole genome, chromosomes can be analyzed in parallel with `--jobs`
 
 ```bash
-chromcov coverage --cram … --reference … --full --outdir out/ --jobs 4
+chromcov coverage --config config.yaml --full --outdir out/ --jobs 4
 ```
 
 This writes, under `out/`:
