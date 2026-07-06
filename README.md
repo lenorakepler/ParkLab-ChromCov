@@ -99,7 +99,7 @@ Run `--full` with `--window N`
 
 ## Write-Up
 
-The main thing is a custom function to calculate coverage (calc*cov.py:calc_cov) It uses the same algorithm as mosdepth, where instead of recording and summing every read at every position, O(depth \* reference positions) it instead records the start and end of each read, ~O(reads). It adds +1 to the first reference position a read covers a -1 to the first position it does \_not* cover. A cumulative sum (truly it's like magic) yields the total coverage at each base in the reference genome.
+The main thing is a custom function to calculate coverage (calc_cov.py:calc_cov). It uses the same algorithm as mosdepth, where instead of recording and summing every read at every position, O(depth * reference positions) it instead records the start and end of each read, ~O(reads). It adds +1 to the first reference position a read covers a -1 to the first position it does *not* cover. A cumulative sum (truly it's like magic) yields the total coverage at each base in the reference genome.
 
 I tried to look at where this metric might be integrated into existing workflows by examining both the Park Lab repo and the SMaHT DAC repo. This confirmed my suspicion that per-chromosome coverage is a broad QC metric that is unlikely to be used as input into any downstream analyses. This statistic can be used to confirm at larger scales to confirm that target depth is adequate and on a per-sample basis to surface gross, large-scale feature estimates like aneuploidy and the sex-chromosome complement that might themselves be verifying QC signals or, alternately, previously-unknown features that might bias results or be worthy of further investigation.
 
