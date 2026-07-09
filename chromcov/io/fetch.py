@@ -1,5 +1,5 @@
 """
-Data acquisition: download callability stratification files
+Data acquisition: download callability strata files (was fetch.py).
 Should also have ability to download CRAM files.
 """
 from __future__ import annotations
@@ -15,6 +15,7 @@ SMAHT_STRATA = {
     "difficult": "SMaHT_difficult_hg38.bed.gz",
     "extreme": "SMaHT_extreme_hg38.bed.gz",
 }
+
 
 def download(url: str, dest: str | Path, force: bool = False) -> tuple[Path, bool]:
     """Download `url` to `dest` atomically. Returns (path, downloaded?) where

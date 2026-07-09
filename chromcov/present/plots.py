@@ -15,7 +15,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from .strata import STRATUM_ORDER
+from ..categories import STRATUM_ORDER
 
 # Primary assembly in karyotypic order; decoys/unplaced omitted from the headline
 # plots (their per-base means are multi-mapping artifacts).

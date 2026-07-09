@@ -35,12 +35,19 @@ import pytest
 
 from click.testing import CliRunner
 
-from chromcov import perbase
-from chromcov.calc_cov import calc_cov
+from chromcov.io import track as perbase
+from chromcov.kernel import calc_cov
 from chromcov.cli import main
-from chromcov.config import Config, ReadFilter
-from chromcov.coverage import run_coverage
-from chromcov.qc_report import QCReport, compute_chrom
+from chromcov.config.schema import Config
+from chromcov.filtering import ReadFilter
+from chromcov.pipeline import Depth, Source, compute_partition
+from chromcov.pipeline import run as pipeline_run
+from chromcov.present import frames
+
+
+def run_coverage(cfg, jobs: int = 1):
+    """Mean-path shim preserving the old return shape (a list of ChromCoverage)."""
+    return pipeline_run(cfg, depth=Depth.MEAN, jobs=jobs).coverage_rows()
 
 CHR1_LEN = 30
 CHR2_LEN = 10
@@ -206,17 +213,17 @@ def test_full_matches_mean_and_writes_outputs(synthetic, tmp_path):
     """The --full per-base pass reports the SAME mean as the mean-only path, plus
     stats, and writes the per-chrom bedgraphs + the analysis outputs."""
     bedgraph_dir = tmp_path / "perbase"
-    rep = QCReport(synthetic)
-    rep.run(bedgraph_dir=bedgraph_dir, jobs=1)
+    result = pipeline_run(synthetic, depth=Depth.FULL, source=Source.ALIGNMENT,
+                          jobs=1, bedgraph_dir=bedgraph_dir)
 
-    rows = {r.chrom: r for r in rep.coverage_rows()}
+    rows = {r.chrom: r for r in result.coverage_rows()}
     assert rows["chr1"].bases == EXPECTED_CHR1_BASES_DEFAULT
     assert rows["chr1"].mean == pytest.approx(EXPECTED_CHR1_BASES_DEFAULT / CHR1_LEN)
     assert rows["chr1"].stats is not None            # full carries per-base stats
     assert perbase.has_bedgraph(bedgraph_dir, "chr1")
     assert perbase.has_bedgraph(bedgraph_dir, "chr2")
 
-    written = rep.write_outputs(tmp_path)
+    written = frames.write_outputs(result, tmp_path)
     assert (tmp_path / "coverage.tsv").exists()
     assert written["bar"].exists() and written["scatter"].exists()
 
@@ -225,10 +232,10 @@ def test_resume_reuses_existing_bedgraph(synthetic, tmp_path):
     """A contig already on disk is not recomputed (resume), and the run still
     produces the full genome."""
     bedgraph_dir = tmp_path / "perbase"
-    compute_chrom(synthetic, "chr1", bedgraph_dir)          # pretend a prior partial run
+    compute_partition(synthetic, "chr1", bedgraph_dir)      # pretend a prior partial run
     mtime = perbase.bedgraph_path(bedgraph_dir, "chr1").stat().st_mtime_ns
 
-    QCReport(synthetic).run(bedgraph_dir=bedgraph_dir, jobs=1)
+    pipeline_run(synthetic, depth=Depth.FULL, bedgraph_dir=bedgraph_dir, jobs=1)
     assert perbase.bedgraph_path(bedgraph_dir, "chr1").stat().st_mtime_ns == mtime  # untouched
     assert perbase.has_bedgraph(bedgraph_dir, "chr2")       # the rest got computed
 
@@ -237,19 +244,17 @@ def test_gather_is_cram_free_and_reproduces(synthetic, tmp_path):
     """`plot`/gather reduces from the bedgraphs alone (lengths from the reference),
     reproducing the same per-chrom bases."""
     bedgraph_dir = tmp_path / "perbase"
-    QCReport(synthetic).run(bedgraph_dir=bedgraph_dir, jobs=1)
+    pipeline_run(synthetic, depth=Depth.FULL, bedgraph_dir=bedgraph_dir, jobs=1)
 
-    regathered = QCReport(synthetic)
-    regathered.gather(bedgraph_dir)                          # no CRAM used
+    regathered = pipeline_run(synthetic, depth=Depth.FULL, source=Source.TRACKS,
+                              bedgraph_dir=bedgraph_dir)      # no CRAM used
     rows = {r.chrom: r.bases for r in regathered.coverage_rows()}
     assert rows == {"chr1": EXPECTED_CHR1_BASES_DEFAULT, "chr2": EXPECTED_CHR2_BASES}
 
 
 def test_jobs_parallel_matches_serial(synthetic, tmp_path):
-    serial = QCReport(synthetic)
-    serial.run(bedgraph_dir=tmp_path / "s", jobs=1)
-    parallel = QCReport(synthetic)
-    parallel.run(bedgraph_dir=tmp_path / "p", jobs=2)
+    serial = pipeline_run(synthetic, depth=Depth.FULL, bedgraph_dir=tmp_path / "s", jobs=1)
+    parallel = pipeline_run(synthetic, depth=Depth.FULL, bedgraph_dir=tmp_path / "p", jobs=2)
     assert {r.chrom: r.bases for r in serial.coverage_rows()} == \
            {r.chrom: r.bases for r in parallel.coverage_rows()}
 
@@ -287,14 +292,13 @@ def test_windows_tagged_with_dominant_stratum(synthetic, tmp_path):
     diff.write_text("chr1\t20\t30\n")           # the other 10 bp
     cfg = synthetic.model_copy(update={"strata": {"easy": str(easy), "difficult": str(diff)}})
 
-    rep = QCReport(cfg)
-    rep.run(bedgraph_dir=tmp_path / "perbase", jobs=1)
+    result = pipeline_run(cfg, depth=Depth.FULL, bedgraph_dir=tmp_path / "perbase", jobs=1)
 
-    assert all("stratum" in w for w in rep.win_rows)
-    chr1 = [w for w in rep.win_rows if w["chrom"] == "chr1"]
+    assert all("stratum" in w for w in result.win_rows)
+    chr1 = [w for w in result.win_rows if w["chrom"] == "chr1"]
     assert chr1 and chr1[0]["stratum"] == "easy"   # 20 bp easy dominates 10 bp difficult
 
-    written = rep.write_outputs(tmp_path)
+    written = frames.write_outputs(result, tmp_path)
     assert written["scatter"].exists()
     assert written["strata"].exists()
 

@@ -5,8 +5,8 @@ windowed frame derives copy number + focal flag vectorized.
 """
 import numpy as np
 
-from chromcov.depth import ChromDepth
-from chromcov.report import (
+from chromcov.reduce import ChromDepth
+from chromcov.present.frames import (
     ChromCoverage,
     coverage_frame,
     windows_frame,

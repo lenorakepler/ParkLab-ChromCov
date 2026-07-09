@@ -7,10 +7,10 @@ and the aneuploidy-aware QC flags.
 """
 import numpy as np
 
-from chromcov import qc_flags
-from chromcov.depth import ChromDepth, ChromStats, DepthHistogram
-from chromcov.qc_flags import copy_number, is_autosome
-from chromcov.strata import Strata
+from chromcov import policy
+from chromcov.reduce import ChromDepth, ChromStats, DepthHistogram
+from chromcov.policy import copy_number, is_autosome
+from chromcov.categories import Strata
 
 
 def test_histogram_counts_and_stats():
@@ -99,30 +99,30 @@ def _stats(median=10.0, breadth20=0.8, robust_mad=1.0):
 
 def test_qc_flags_are_aneuploidy_aware():
     st = _stats()
-    assert "CN_GAIN" in qc_flags.chrom_flags("chr1", st, cn=3.0, baseline=10)
-    assert "CN_LOSS" in qc_flags.chrom_flags("chr1", st, cn=1.0, baseline=10)
+    assert "CN_GAIN" in policy.chrom_flags("chr1", st, cn=3.0, baseline=10)
+    assert "CN_LOSS" in policy.chrom_flags("chr1", st, cn=1.0, baseline=10)
     # A single X at CN~1 is normal, not a loss.
-    assert qc_flags.chrom_flags("chrX", st, cn=1.0, baseline=10) == []
+    assert policy.chrom_flags("chrX", st, cn=1.0, baseline=10) == []
     # True near-absence (loss of Y) is flagged anywhere.
-    assert "CN_DEPLETED" in qc_flags.chrom_flags("chrY", st, cn=0.1, baseline=10)
+    assert "CN_DEPLETED" in policy.chrom_flags("chrY", st, cn=0.1, baseline=10)
 
 
 def test_qc_low_callable_and_uneven():
-    assert "LOW_CALLABLE" in qc_flags.chrom_flags("chr1", _stats(breadth20=0.5), cn=2.0, baseline=10)
-    assert "UNEVEN" in qc_flags.chrom_flags("chr1", _stats(robust_mad=8.0), cn=2.0, baseline=10)
+    assert "LOW_CALLABLE" in policy.chrom_flags("chr1", _stats(breadth20=0.5), cn=2.0, baseline=10)
+    assert "UNEVEN" in policy.chrom_flags("chr1", _stats(robust_mad=8.0), cn=2.0, baseline=10)
 
 
 def test_window_flag_thresholds():
-    assert qc_flags.window_flag(3.0) == "GAIN"
-    assert qc_flags.window_flag(0.1) == "DEPLETED"
-    assert qc_flags.window_flag(1.0) == "LOSS"
-    assert qc_flags.window_flag(2.0) == "."
+    assert policy.window_flag(3.0) == "GAIN"
+    assert policy.window_flag(0.1) == "DEPLETED"
+    assert policy.window_flag(1.0) == "LOSS"
+    assert policy.window_flag(2.0) == "."
 
 
 def test_qc_thresholds_are_configurable():
     from chromcov.config import QCThresholds
     st = _stats(median=10.0)
-    assert "CN_GAIN" in qc_flags.chrom_flags("chr1", st, cn=2.6, baseline=10)
+    assert "CN_GAIN" in policy.chrom_flags("chr1", st, cn=2.6, baseline=10)
     # Raise the gain bar above 2.6 -> no longer flagged.
     thr = QCThresholds(gain_cn=3.0)
-    assert "CN_GAIN" not in qc_flags.chrom_flags("chr1", st, cn=2.6, baseline=10, thr=thr)
+    assert "CN_GAIN" not in policy.chrom_flags("chr1", st, cn=2.6, baseline=10, thr=thr)

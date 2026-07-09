@@ -1,53 +1,47 @@
 """
 chromcov command-line interface (Click)
-    
+
     # DEFAULT: per-chromosome mean table, no per-base output
+    # ---------------------------------------------------------------
     chromcov coverage --cram ... --reference ... -o ...
     (leave out -o for stdout)
 
-    # EXTRAS: output per-base bedgraphs, stats, plots, stratification
+    # EXTRAS: output per-base tracks, stats, plots, stratification
               this is also resume-able given an existing directory
+    # ---------------------------------------------------------------
     chromcov coverage ... --full --outdir out/
 
-    # RE-GRAPH: re-generate plots from existing bedgraphs
+    # RE-GRAPH: re-generate plots from existing tracks
+    # ---------------------------------------------------------------
     chromcov plot --outdir out/
 
-    # FETCH STRATIFICATION: download files that categorize the genome 
+    # FETCH STRATIFICATION: download files that categorize the genome
+    # ---------------------------------------------------------------
                             based on practical ability to variant call
                             (github.com/parklab/SMaHT_Regional_Categorization)
     chromcov fetch strata
 
-Handles config loading (from Config.config), overriding, and outputting to sidecar
-json for reproducibility. Dispatches to desired functions.
+Thin dispatch: parse -> Config.load -> pipeline.run -> present. Config loading,
+CLI override, and the provenance sidecar are delegated to their modules.
 """
 from __future__ import annotations
 
 import json
-import subprocess
-import sys
-from datetime import datetime, timezone
-from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
 import click
 from pydantic import ValidationError
 
-from . import fetch, report
-from .config import Config
-from .coverage import run_coverage
-from .qc_report import QCReport
-from .strata import Strata
+from .categories import Strata
+from .config.schema import Config
+from .io import fetch
+from .pipeline import Depth, Source, run as pipeline_run
+from .present import frames, sidecar
+from .present.sidecar import RUN_SIDECAR, _resolve
 
-# --------------------------------------------------- #
-# ---------- config handling, CLI override ---------- #
-# ----------- Read, Override, -> Sidecar ------------ #
-# --------------------------------------------------- #
-
-RUN_SIDECAR = "run.json"
-
-def _resolve(p: str | None) -> Path | None:
-    return Path(p).expanduser().resolve() if p else None
-
+# ==============================================================================
+# CONFIG HANDLING
+# ==============================================================================
 def _overrides(**kw) -> dict:
     """CLI options actually given -> a dict of Config field names. Paths resolved
     absolutely; None/empty dropped so model defaults (and any --config) apply."""
@@ -76,65 +70,18 @@ def _load(config, **overrides) -> Config:
             f"(or a --config that sets them).\n{e}"
         )
 
-
+# ==============================================================================
+# SETUP FUNCS
+# ==============================================================================
 def _emit(rows, output) -> None:
     """Write the coverage table: stdout by default (or when -o '-'), else to FILE."""
-    frame = report.coverage_frame(rows)
+    frame = frames.coverage_frame(rows)
     if output in (None, "-"):
-        report.write_table(frame, "-")
+        frames.write_table(frame, "-")
         return
     target = Path(output).expanduser().resolve()
-    report.write_table(frame, target)
+    frames.write_table(frame, target)
     click.echo(f"wrote {target}", err=True)
-
-
-def _tool_version() -> dict:
-    """Package version + interpreter -- pins the analysis code in the sidecar."""
-    try:
-        pkg_version = version("parklab-chromcov")
-    except PackageNotFoundError:
-        pkg_version = None
-    return {"name": "parklab-chromcov", "version": pkg_version, "python": sys.version.split()[0]}
-
-
-def _run_git(args: list[str]) -> str | None:
-    try:
-        out = subprocess.run(["git", *args], cwd=Path(__file__).resolve().parent,
-                             capture_output=True, text=True, check=True)
-        return out.stdout.strip()
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        return None
-
-
-def _git_provenance() -> dict:
-    """Exact commit + whether the tree was dirty. A commit SHA is meaningless if
-    uncommitted changes were on disk, so `dirty` is the part that protects repro."""
-    status = _run_git(["status", "--porcelain"])
-    return {
-        "commit": _run_git(["rev-parse", "HEAD"]),
-        "branch": _run_git(["rev-parse", "--abbrev-ref", "HEAD"]),
-        "describe": _run_git(["describe", "--tags", "--dirty", "--always"]),
-        "dirty": bool(status) if status is not None else None,
-    }
-
-
-def _write_run_sidecar(path: Path, report: QCReport, config_file) -> None:
-    """run.json for a --full run: self-describing + re-runnable. Embeds the
-    resolved Config so `chromcov plot` (and a human) can reconstruct the run from
-    the output dir alone."""
-    baseline, source = report.baseline()
-    record = {
-        "schema": "chromcov.run/3",
-        "generated_utc": datetime.now(timezone.utc).isoformat(),
-        "tool": _tool_version(),
-        "code": _git_provenance(),
-        "config_file": str(_resolve(config_file)) if config_file else None,
-        "config": report.cfg.model_dump(mode="json"),
-        "chromosomes": report.chroms,
-        "baseline": {"value": round(baseline, 4), "source": source},
-        "flagged": {c: fl for c, fl in report.flagged},
-    }
-    path.write_text(json.dumps(record, indent=2, sort_keys=True))
 
 
 def input_options(func):
@@ -150,21 +97,19 @@ def input_options(func):
                         default=None, help="run-config YAML (CLI options override its values)")(func)
     return func
 
-# --------------------------------------------------- #
-# ------------------ Dispatching -------------------- #
-# --------------------------------------------------- #
-
+# ==============================================================================
+# COVERAGE CALC DISPATCHING
+# ==============================================================================
 @click.group()
 @click.version_option(package_name="parklab-chromcov", prog_name="chromcov")
 def main() -> None:
     """Per-chromosome average coverage from a CRAM, with optional QC extensions."""
 
-
 @main.command()
 @input_options
 @click.option("--chroms", default=None, help="comma-separated contig subset (default: all)")
 @click.option("--full", is_flag=True,
-              help="beyond the mean: per-base depth once (as bedgraphs, which also "
+              help="beyond the mean: per-base depth once (as tracks, which also "
                    "checkpoint resume) -> stats + windows + strata + copy number + plots")
 @click.option("--window", type=int, default=None, help="[--full] windowed-mean bin size (bp)")
 @click.option("--strata", is_flag=True,
@@ -176,20 +121,27 @@ def main() -> None:
               help="directory holding the SMaHT strata BEDs for --strata (default: ./data)")
 @click.option("--jobs", "-j", type=int, default=1,
               help="compute contigs in parallel across N processes (default 1)")
-@click.option("--force", is_flag=True, help="[--full] recompute bedgraphs even if present")
+@click.option("--force", is_flag=True, help="[--full] recompute tracks even if present")
 @click.option("--outdir", type=click.Path(file_okay=False), default=None,
-              help="[--full] output root (default: ./out); bedgraphs -> <outdir>/perbase/")
+              help="[--full] output root (default: ./out); tracks -> <outdir>/perbase/")
 @click.option("--output", "-o", default=None,
               help="write the mean table to FILE ('-' for stdout; the default)")
 def coverage(cram, reference, index, min_mapq, config, chroms, full, window, strata,
              strata_dir, jobs, force, outdir, output) -> None:
-    """Per-chromosome average coverage.
+    """
+    Per-chromosome average coverage.
 
-    By default reports the mean per chromosome (bases / length) to stdout. `--full`
-    additionally computes per-base depth and derives robust stats, callability
-    strata, approximate copy number, QC flags, and plots -- writing per-base
-    bedgraphs under <outdir>/perbase/ that make the run resumable and the graphs
-    incremental. The mean is identical to the default run."""
+    By default reports the mean per chromosome (bases / length) to stdout.
+
+    `--full` also computes per-base depth and derives robust stats, callability
+    strata, approximate copy number, QC flags, and plots -- writing per-base tracks
+    under <outdir>/perbase/ that make the run resumable and the graphs incremental.
+    The mean is identical to the default run.
+    """
+
+    # ------------------------------------------------------------------------------
+    # Stratify
+    # ------------------------------------------------------------------------------
     # --strata is all-or-nothing: on -> the fixed SMaHT tier set (resolved from
     # --strata-dir); off -> no stratification (unless a --config supplies its own).
     strata_map = None
@@ -205,69 +157,92 @@ def coverage(cram, reference, index, min_mapq, config, chroms, full, window, str
     cfg = _load(config, cram=cram, reference=reference, index=index, min_mapq=min_mapq,
                 chroms=chroms, window=window, strata=strata_map, outdir=outdir)
 
+    # ------------------------------------------------------------------------------
+    # Mean-only return
+    # ------------------------------------------------------------------------------
     if not full:
-        _emit(run_coverage(cfg, jobs=jobs), output)
+        result = pipeline_run(cfg, depth=Depth.MEAN, jobs=jobs)
+        _emit(result.coverage_rows(), output)
         return
 
-    report = QCReport(cfg, Strata.from_arg(cfg.strata))
+    # ------------------------------------------------------------------------------
+    # Full
+    # ------------------------------------------------------------------------------
     bedgraph_dir = Path(cfg.outdir) / "perbase"
-    pf = report.run(bedgraph_dir=bedgraph_dir, jobs=jobs, force=force)
-    click.echo(f"[preflight] {pf['reference_check']['status']}", err=True)
+    result = pipeline_run(
+        cfg, depth=Depth.FULL, 
+        source=Source.ALIGNMENT,
+        jobs=jobs,
+        force=force, 
+        bedgraph_dir=bedgraph_dir, 
+        categories=Strata.from_arg(cfg.strata)
+        )
+    click.echo(f"[preflight] {result.preflight['reference_check']['status']}", err=True)
 
+    # Output
     outdir_p = Path(cfg.outdir)
-    written = report.write_outputs(outdir_p)
-    _write_run_sidecar(outdir_p / RUN_SIDECAR, report, config)
+    written = frames.write_outputs(result, outdir_p)
+    sidecar.write_run_sidecar(outdir_p / RUN_SIDECAR, result, config)
     if output:
-        _emit(report.coverage_rows(), output)
+        _emit(result.coverage_rows(), output)
 
-    for line in report.summary_lines():
+    for line in frames.summary_lines(result):
         click.echo(line, err=True)
-    click.echo(f"per-base bedgraphs: {bedgraph_dir}", err=True)
+
+    click.echo(f"per-base tracks: {bedgraph_dir}", err=True)
     click.echo(f"outputs: {outdir_p}", err=True)
     for name, path in written.items():
         click.echo(f"  {name}: {path.name}", err=True)
 
-
+# ==============================================================================
+# PLOTTING
+# ==============================================================================
 @main.command()
 @click.option("--outdir", type=click.Path(file_okay=False), default="out",
               help="a --full run dir (holds run.json + perbase/); default ./out")
 def plot(outdir) -> None:
-    """(Re)build the tables and plots from the bedgraphs already under --outdir.
+    """
+    (Re)build the tables and plots from the tracks already under --outdir.
 
-    Reads the run's config from run.json and reduces whatever contigs have a
-    bedgraph in perbase/ -- so running more contigs (coverage --full ...) and then
-    `plot` updates the graphs, with the copy-number baseline recomputed over every
-    contig present. No CRAM needed."""
+    Reads the run's config from run.json and reduces whatever contigs have a track
+    in perbase/ -- so running more contigs (coverage --full ...) and then `plot`
+    updates the graphs, with the copy-number baseline recomputed over every contig
+    present. No CRAM needed.
+    """
     outdir_p = Path(outdir)
-    sidecar = outdir_p / RUN_SIDECAR
-    if not sidecar.exists():
+    sidecar_path = outdir_p / RUN_SIDECAR
+    if not sidecar_path.exists():
         raise click.UsageError(
             f"no {RUN_SIDECAR} under {outdir_p}/ -- run `chromcov coverage --full "
             f"--outdir {outdir}` first")
-    cfg = Config.model_validate(json.loads(sidecar.read_text())["config"])
+    cfg = Config.model_validate(json.loads(sidecar_path.read_text())["config"])
 
-    report = QCReport(cfg, Strata.from_arg(cfg.strata))
-    report.gather(outdir_p / "perbase")
-    if not report.chroms:
-        raise click.UsageError(f"no per-base bedgraphs under {outdir_p / 'perbase'}/")
-    written = report.write_outputs(outdir_p)
-    for line in report.summary_lines():
+    result = pipeline_run(cfg, depth=Depth.FULL, source=Source.TRACKS,
+                          bedgraph_dir=outdir_p / "perbase", categories=Strata.from_arg(cfg.strata))
+    if not result.chroms:
+        raise click.UsageError(f"no per-base tracks under {outdir_p / 'perbase'}/")
+    written = frames.write_outputs(result, outdir_p)
+    for line in frames.summary_lines(result):
         click.echo(line, err=True)
     for name, path in written.items():
         click.echo(f"  {name}: {path.name}", err=True)
 
-
+# ==============================================================================
+# CONFIG GENERATION
+# ==============================================================================
 @main.command(name="gen-config")
 @click.option("--output", "-o", "output", type=click.Path(dir_okay=False),
               default="config.yaml", help="path to write (default: ./config.yaml)")
 @click.option("--force", is_flag=True, help="overwrite if the file already exists")
 def gen_config_cmd(output, force) -> None:
-    """Write an editable run-config YAML pre-filled with every option at its
+    """
+    Write an editable run-config YAML pre-filled with every option at its
     current default.
 
     Values are read live from the Config model, so the generated file always
-    matches the code's defaults -- edit it and pass it back with `--config`."""
-    from .gen_config import write_default_config
+    matches the code's defaults -- edit it and pass it back with `--config`.
+    """
+    from .config.template import write_default_config
 
     path = Path(output)
     if path.exists() and not force:
@@ -276,11 +251,12 @@ def gen_config_cmd(output, force) -> None:
     click.echo(f"wrote {path}")
     click.echo(f"edit it, then: chromcov coverage --config {path}", err=True)
 
-
+# ==============================================================================
+# STRATA FETCHING
+# ==============================================================================
 @main.group(name="fetch")
 def fetch_group() -> None:
     """Download inputs a clean clone needs (callability strata, ...)."""
-
 
 @fetch_group.command(name="strata")
 @click.option("--dest", type=click.Path(file_okay=False), default="data",
@@ -293,7 +269,6 @@ def fetch_strata_cmd(dest, force) -> None:
     if str(dest) not in ("data", "./data"):
         hint += f" --strata-dir {dest}"
     click.echo("\nuse them with:\n" + hint)
-
 
 if __name__ == "__main__":
     main()

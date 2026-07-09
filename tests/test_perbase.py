@@ -7,8 +7,8 @@ import gzip
 
 import numpy as np
 
-from chromcov.depth import ChromDepth
-from chromcov import perbase
+from chromcov.reduce import ChromDepth
+from chromcov.io import track as perbase
 
 
 def _roundtrip(tmp_path, vec):

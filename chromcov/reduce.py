@@ -1,22 +1,22 @@
 """
-Per-chromosome reductions over the per-base depth vector.
+Per-chromosome reductions over the per-base depth vector (was depth.py).
 
 Two classes, both here:
 
 `ChromDepth` wraps one chromosome's per-base int32 depth vector (as handed back
-by `calc_cov(..., per_base=True)`, or reconstructed from a bedgraph) and owns
-every reduction of it:
+by `calc_cov(..., per_base=True)`, or reconstructed from a track) and owns every
+reduction of it:
 
   .histogram()       -> a DepthHistogram (cached).
   .stats()           -> ChromStats (shortcut for .histogram().stats()).
   .windowed_means()  -> depth averaged into fixed bins. ~1000x smaller than
                         per-base; feeds every plot and the per-window CN.
   .masked(mask)      -> a ChromDepth over a boolean-selected subset (callability
-                        strata), so a stratum histogram is `.masked(m).histogram()`.
+                        categories), so a category histogram is `.masked(m).histogram()`.
 
 `DepthHistogram` wraps the depth-count array -- a *sufficient statistic* for mean,
 median, variance, CV, MAD, any quantile, and breadth-at-depth, in O(max_depth)
-with no sort. It adds (`h1 + h2`), so genome-wide and per-stratum stats are just
+with no sort. It adds (`h1 + h2`), so genome-wide and per-category stats are just
 pooled histograms of the per-chromosome ones -- which is why it isn't tied to a
 single ChromDepth.
 
@@ -24,7 +24,7 @@ The design intent: the reducer turns each chromosome into compact intermediates
 (a few-KB histogram + windowed means) and discards the vector, so peak memory
 stays ~one chromosome (chr1 ~1 GB transient) instead of the whole genome.
 
-Copy number + QC flags live in `flags.py` (they take a ChromStats, not a vector).
+Copy number + QC flags live in `policy.py` (they take a ChromStats, not a vector).
 """
 from __future__ import annotations
 
@@ -61,7 +61,7 @@ class ChromStats:
 class DepthHistogram:
     """Counts of positions at each depth 0..cap. A sufficient statistic for the
     whole ChromStats family, and additive: summing per-chromosome histograms
-    gives the genome-wide (or per-stratum) one."""
+    gives the genome-wide (or per-category) one."""
 
     def __init__(self, counts: np.ndarray, breadth_thresholds=BREADTH_THRESHOLDS):
         self.counts = counts

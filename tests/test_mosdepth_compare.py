@@ -24,8 +24,8 @@ from pathlib import Path
 
 import pytest
 
-from chromcov import run_coverage
-from chromcov.config import Config
+from chromcov import Depth, run
+from chromcov.config.schema import Config
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _DATA = _REPO_ROOT / "data"
@@ -46,7 +46,8 @@ requires_data = pytest.mark.skipif(
 @requires_data
 @requires_mosdepth
 def test_native_matches_mosdepth_addon(tmp_path):
-    (native,) = run_coverage(Config(cram=_CRAM, reference=_REF, chroms=(_CONTIG,)))
+    (native,) = run(Config(cram=_CRAM, reference=_REF, chroms=(_CONTIG,)),
+                    depth=Depth.MEAN).coverage_rows()
 
     subprocess.run(
         [sys.executable, str(_SCRIPT), "--cram", str(_CRAM), "--reference", str(_REF),

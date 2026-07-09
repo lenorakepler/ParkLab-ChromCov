@@ -5,7 +5,7 @@ contributes only overrides. These pin that precedence + the required-inputs rule
 import pytest
 import yaml
 
-from chromcov.config import Config, _YAML_TO_FIELD
+from chromcov.config.schema import Config, _YAML_TO_FIELD
 
 
 def test_every_config_field_is_loadable_from_yaml():

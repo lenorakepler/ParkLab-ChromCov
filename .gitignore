@@ -186,3 +186,6 @@ cython_debug/
 #  refer to https://docs.cursor.com/context/ignore-files
 .cursorignore
 .cursorindexingignore
+
+# io-flow generated diagrams (rebuild from docs/diagrams/*.yaml); ~1.7MB each
+docs/diagrams/*.html

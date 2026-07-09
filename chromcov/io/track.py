@@ -1,5 +1,9 @@
 """
-Record per-base coverage
+Per-base depth track I/O (was perbase.py): RLE bedgraph.gz read/write.
+
+The track is the on-disk boundary that decouples compute from reduce on the
+--full path -- writing it makes a run resumable (a present track is a no-op
+recompute) and lets the plot/gather flow re-reduce with no CRAM.
 """
 from __future__ import annotations
 
@@ -9,23 +13,27 @@ from pathlib import Path
 
 import numpy as np
 
-from .depth import ChromDepth
+from ..reduce import ChromDepth
 
 BEDGRAPH_SUFFIX = ".per-base.bedgraph.gz"
+
 
 def bedgraph_path(directory: str | Path, chrom: str) -> Path:
     return Path(directory) / f"{chrom}{BEDGRAPH_SUFFIX}"
 
+
 def has_bedgraph(directory: str | Path, chrom: str) -> bool:
     return bedgraph_path(directory, chrom).exists()
 
+
 def bedgraph_chroms(directory: str | Path) -> list[str]:
-    """Chromosomes with a bedgraph present -- what the gather/plot step reads."""
+    """Chromosomes with a track present -- what the gather/plot step reads."""
     directory = Path(directory)
     if not directory.exists():
         return []
     return sorted(p.name[: -len(BEDGRAPH_SUFFIX)]
                   for p in directory.glob(f"*{BEDGRAPH_SUFFIX}"))
+
 
 def write_bedgraph(directory: str | Path, chrom: str, depth: ChromDepth) -> Path:
     """Write chrom's per-base depth as an RLE bedgraph.gz, atomically. Vectorized
@@ -53,6 +61,7 @@ def write_bedgraph(directory: str | Path, chrom: str, depth: ChromDepth) -> Path
                        fmt=f"{chrom}\t%d\t%d\t%d")
     os.replace(tmp, path)   # atomic: a complete file appears in one step
     return path
+
 
 def read_bedgraph(path: str | Path, length: int) -> np.ndarray:
     """Reconstruct the per-base int32 depth vector from a stored RLE bedgraph.

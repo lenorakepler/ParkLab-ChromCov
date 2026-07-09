@@ -5,8 +5,8 @@ If a Config default changes, this test guarantees the generated file follows.
 """
 import yaml
 
-from chromcov.config import Config, QCThresholds
-from chromcov.gen_config import render_default_config, write_default_config
+from chromcov.config.schema import Config, QCThresholds
+from chromcov.config.template import render_default_config, write_default_config
 
 
 def test_generated_config_is_valid_yaml():

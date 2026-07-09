@@ -1,6 +1,6 @@
 """
-Region strata for callability-aware coverage, keyed to Park Lab's
-SMaHT_Regional_Categorization (GRCh38):
+Region categories (callability strata) for callability-aware coverage, keyed to
+Park Lab's SMaHT_Regional_Categorization (GRCh38):
 
   easy       1000G strict accessibility mask (most reliably callable)
   difficult  PanMask pm151 minus 1000G mask (moderately mappable, artifact-prone)
@@ -12,7 +12,8 @@ SMaHT_Regional_Categorization (GRCh38):
 `Strata` holds one BED per label, loaded to per-chromosome interval arrays, and
 turns those into a boolean position mask with the SAME finite-difference trick
 the coverage calc uses (+1 at starts, -1 at ends, cumsum > 0) -- vectorized, and
-it handles overlapping/unsorted intervals for free.
+it handles overlapping/unsorted intervals for free. This is masking *mechanism*;
+the policy for what counts as normal lives in `policy.py`.
 """
 from __future__ import annotations
 
@@ -22,6 +23,7 @@ import numpy as np
 
 # Conventional label order, best -> worst callability.
 STRATUM_ORDER = ("easy", "difficult", "extreme")
+
 
 def _load_bed(path: str | Path) -> dict[str, tuple[np.ndarray, np.ndarray]]:
     """BED[.gz] -> {chrom: (starts, ends)} as int arrays (0-based half-open)."""
@@ -37,6 +39,7 @@ def _load_bed(path: str | Path) -> dict[str, tuple[np.ndarray, np.ndarray]]:
             starts.setdefault(c, []).append(int(s))
             ends.setdefault(c, []).append(int(e))
     return {c: (np.asarray(starts[c]), np.asarray(ends[c])) for c in starts}
+
 
 class Strata:
     """Callability tiers: label -> {chrom: (starts, ends)}, with position masks."""

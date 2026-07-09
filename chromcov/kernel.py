@@ -1,15 +1,14 @@
 """
-Set up filtering out reads:
-	class: ReadFilter
-	_to_mask()
+The coverage kernel: `calc_cov` tallies aligned bases over one contig.
 
-Main coverage calculation:
-	calc_cov()
+Read filtering (`ReadFilter`, `to_mask`) lives in `chromcov.filtering`; this
+module is only the depth computation. `per_base=False` returns just the base
+total (the mean path); `per_base=True` also returns the exact per-base depth
+vector (the --full path) -- the two totals agree because the mean is the same
+number computed without materializing the vector.
 """
-from pathlib import Path
-
 import numpy as np
-import pysam
+
 
 def calc_cov(cram, chrom, read_filter, per_base=False):
     chrom_length = cram.get_reference_length(chrom)
@@ -53,31 +52,3 @@ def calc_cov(cram, chrom, read_filter, per_base=False):
     chrom_cov = total_depth / chrom_length
 
     return base_depth, total_depth, chrom_cov
-
-
-if __name__ == "__main__":
-    import timeit
-
-    from chromcov.config import ReadFilter
-
-    data_dir = Path().resolve() / "data"
-    cram_file = str(data_dir / "COLO829T_TEST.cram")
-    cram_ref = str(data_dir / "GCA_000001405.15_GRCh38_no_alt_analysis_set.fa")
-    cram_index = str(data_dir / "COLO829T_TEST.cram.crai")
-
-    cram = pysam.AlignmentFile(cram_file, "rc", reference_filename=cram_ref, index_filename=cram_index)
-    chroms = ["chrUn_KI270382v1", "chr21"]
-    read_filter = ReadFilter()
-
-    def per_base():
-        for chrom in chroms:
-            base_depth, total_depth, chrom_cov = calc_cov(cram, chrom, read_filter, per_base=True)
-            print(f"Per base, {chrom}: {base_depth}, {total_depth}, {chrom_cov}")
-
-    def aggregated():
-        for chrom in chroms:
-            base_depth, total_depth, chrom_cov = calc_cov(cram, chrom, read_filter, per_base=False)
-            print(f"Aggregated, {chrom}: {base_depth}, {total_depth}, {chrom_cov}")
-
-    print(f"--> Time for per base: {timeit.timeit(per_base, number=1):.3f} seconds\n")
-    print(f"--> Time for aggregated: {timeit.timeit(aggregated, number=1):.3f} seconds")
