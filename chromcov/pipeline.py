@@ -72,22 +72,35 @@ def _compute_worker(args) -> str:
     compute_partition(cfg, chrom, bedgraph_dir, force=force)
     return chrom
 
-# --- the pipeline -------------------------------------------------------------
-
+# ==============================================================================
+#  Dispatch to different pipelines to calculate or read previously calculated
+#  coverage info from specified chromosomes and return the accumulated RunResult.
+# ==============================================================================
 def run(cfg, *, depth: Depth = Depth.MEAN, source: Source = Source.ALIGNMENT,
         jobs: int = 1, force: bool = False, bedgraph_dir=None,
         categories: Strata | None = None, chroms: list[str] | None = None,
         skip_preflight: bool = False) -> RunResult:
     """
-    Run one coverage pass and return the accumulated RunResult.
+    Calculate or fetch coverage for selected chromosomes and return a pooled RunResult.
+
+    Source = ALIGNMENT -> Depth.MEAN -> Calculate ONLY mean per chrom, return.
+                       -> Depth.FULL -> Calculate mean per base, save as bedgraph
+
+    Source = TRACKS    ->               Get per base coverage info from bedgraphs
+                                        
 
     Kept free of argparse/IO-formatting so tests/workflows can call it directly.
     `jobs > 1` computes contigs in parallel (each worker opens its own handle).
     """
+
+    # Get stratification categories
     cats = categories if categories is not None else Strata.from_arg(cfg.strata)
+    
+    # Instantiate RunResult
     result = RunResult(cfg=cfg, depth=depth, categories=cats)
 
-    # Resolve the contigs to process + their lengths, from the chosen source.
+    # Get contig list and lengths from source
+    # If source is CRAM alignment, do preflight validation
     if source is Source.ALIGNMENT:
         if not skip_preflight:
             result.preflight = preflight.preflight(cfg)
@@ -95,18 +108,22 @@ def run(cfg, *, depth: Depth = Depth.MEAN, source: Source = Source.ALIGNMENT,
             contig_list = alignment.list_contigs(reader, cfg)
             lengths = alignment.contig_lengths(reader, contig_list)
 
-    else:  # Source.TRACKS -- CRAM-free
+    # Otherwise, get contig list and lengths from bedgraph
+    else:
         contig_list = list(chroms) if chroms else track.bedgraph_chroms(bedgraph_dir)
         lengths = alignment.lengths_from_reference(cfg, contig_list)
 
+    # If just getting mean chrom. depth, calc and return.
     if depth is Depth.MEAN:
         _run_mean(cfg, result, contig_list, lengths, jobs)
         return result
 
-    # FULL: (ALIGNMENT) ensure tracks exist, then reduce tracks in a separate pass.
+    # If doing full, get + save per-base coverage for all chromosomes that do not 
+    # currently have an output bedgraph file
     if source is Source.ALIGNMENT:
         _ensure_tracks(cfg, contig_list, bedgraph_dir, jobs, force)
     
+    # 
     _reduce_tracks(result, contig_list, lengths, bedgraph_dir)
     policy.finalize(result)
     return result

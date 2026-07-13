@@ -209,21 +209,31 @@ def plot(outdir) -> None:
     updates the graphs, with the copy-number baseline recomputed over every contig
     present. No CRAM needed.
     """
+
+    # Load sidecar -- fail if none exists
     outdir_p = Path(outdir)
     sidecar_path = outdir_p / RUN_SIDECAR
     if not sidecar_path.exists():
         raise click.UsageError(
             f"no {RUN_SIDECAR} under {outdir_p}/ -- run `chromcov coverage --full "
             f"--outdir {outdir}` first")
+    
     cfg = Config.model_validate(json.loads(sidecar_path.read_text())["config"])
 
+    # Aggregate existing bedgraphs and load into a Result
     result = pipeline_run(cfg, depth=Depth.FULL, source=Source.TRACKS,
                           bedgraph_dir=outdir_p / "perbase", categories=Strata.from_arg(cfg.strata))
+    
     if not result.chroms:
         raise click.UsageError(f"no per-base tracks under {outdir_p / 'perbase'}/")
+    
+    # Output stats summaries and plots
     written = frames.write_outputs(result, outdir_p)
+    
+    # Output stats to stdout
     for line in frames.summary_lines(result):
         click.echo(line, err=True)
+
     for name, path in written.items():
         click.echo(f"  {name}: {path.name}", err=True)
 

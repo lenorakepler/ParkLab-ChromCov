@@ -5,14 +5,19 @@ This repo is a general-purpose tool for calculating the average per-base sequenc
 ## Installation
 
 ```
-  git clone https://github.com/lenorakepler/ParkLab-ChromCov.git
-  cd ParkLab-ChromCov
- 
-  # builds the env from uv.lock + installs the `chromcov` CLI
-  uv sync                
+  git clone https://github.com/lenorakepler/ParkLab-ChromCov.git
+  cd ParkLab-ChromCov
+ 
+  # builds the env from uv.lock + installs the `chromcov` CLI
+  uv sync
+
+  # activate the env so the bare `chromcov` command is on your PATH
+  source .venv/bin/activate
 ```
 
-No `uv`? `pip install -e .` works too.
+No `uv`? `pip install -e .` (into an activated venv) works too.
+
+Prefer not to activate? Prefix any command below with `uv run`, e.g. `uv run chromcov coverage --config config.yaml`. To put `chromcov` on your PATH globally instead, `uv tool install --editable .` (note: this resolves fresh and does not use `uv.lock`).
 
 ## Usage
 

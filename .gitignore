@@ -1,6 +1,7 @@
 # Project-specific
 data/
 out/
+docs/dev/
 
 # macOS
 .DS_Store
