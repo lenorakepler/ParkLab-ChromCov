@@ -25,6 +25,12 @@ from ..filtering import (
     DEFAULT_INCLUDE_CONTIGS,
     to_mask,
 )
+from ..io.fetch import default_input_paths
+
+# The Park Lab COLO829T test files (data/<name>). fetch.py is the single source of
+# truth for their names + download source; the input fields default to them so a
+# bare `chromcov coverage` runs on the bundled data (fetch with `chromcov fetch inputs`).
+_DEFAULT_INPUTS = default_input_paths()
 
 
 class QCThresholds(BaseModel):
@@ -60,12 +66,12 @@ class Config(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     # --- inputs ---
-    cram: Path = Field(..., json_schema_extra={
-        "section": "inputs", "placeholder": "path/to/sample.cram",
-        "comment": "REQUIRED -- the CRAM to measure"})
-    reference: Path = Field(..., json_schema_extra={
-        "section": "inputs", "placeholder": "path/to/genome.fa",
-        "comment": "REQUIRED -- FASTA the CRAM was compressed against"})
+    cram: Path = Field(_DEFAULT_INPUTS["cram"], json_schema_extra={
+        "section": "inputs",
+        "comment": "the CRAM to measure (default: bundled COLO829T test data; `chromcov fetch inputs`)"})
+    reference: Path = Field(_DEFAULT_INPUTS["reference"], json_schema_extra={
+        "section": "inputs",
+        "comment": "FASTA the CRAM was compressed against (default: bundled GRCh38)"})
     index: Path | None = Field(None, json_schema_extra={
         "section": "inputs", "comment": "CRAM index; null -> <cram>.crai"})
     verify_reference: Literal["auto", "full", "skip"] = Field("auto", json_schema_extra={

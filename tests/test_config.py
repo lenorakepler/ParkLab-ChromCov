@@ -2,7 +2,8 @@
 Config.load: the one place a run is assembled. Config file is the base; the CLI
 contributes only overrides. These pin that precedence + the required-inputs rule.
 """
-import pytest
+from pathlib import Path
+
 import yaml
 
 from chromcov.config.schema import Config, _YAML_TO_FIELD
@@ -52,9 +53,13 @@ def test_overrides_only_no_config(tmp_path):
     assert run.window == 10_000
 
 
-def test_requires_inputs():
-    with pytest.raises(Exception):   # ValidationError: cram/reference missing
-        Config.load(None)
+def test_defaults_to_parklab_inputs():
+    """No config, no CLI -> the bundled Park Lab COLO829T test files under data/,
+    so a bare `chromcov coverage` runs on them (fetch with `chromcov fetch inputs`)."""
+    run = Config.load(None)
+    assert run.cram == Path("data/COLO829T_TEST.cram")
+    assert run.reference == Path("data/GCA_000001405.15_GRCh38_no_alt_analysis_set.fa")
+    assert run.index == Path("data/COLO829T_TEST.cram.crai")   # derived from cram
 
 
 def test_default_index_derived_from_cram(tmp_path):

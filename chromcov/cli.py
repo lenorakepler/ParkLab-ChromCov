@@ -15,6 +15,11 @@ chromcov command-line interface (Click)
     # ---------------------------------------------------------------
     chromcov plot --outdir out/
 
+    # FETCH INPUTS: download the Park Lab COLO829T test CRAM + GRCh38 reference
+    # ---------------------------------------------------------------
+                            into ./data (where the config defaults point)
+    chromcov fetch inputs
+
     # FETCH STRATIFICATION: download files that categorize the genome
     # ---------------------------------------------------------------
                             based on practical ability to variant call
@@ -69,6 +74,22 @@ def _load(config, **overrides) -> Config:
             "invalid or incomplete configuration -- provide --cram and --reference "
             f"(or a --config that sets them).\n{e}"
         )
+
+def _require_inputs(cfg: Config) -> None:
+    """Fail early with a friendly message if the CRAM/reference/index don't exist.
+    When the missing files are the bundled Park Lab defaults, point at `fetch inputs`
+    rather than leaving pysam to raise a bare 'file not found' deeper in the run."""
+    defaults = set(fetch.default_input_paths().values())
+    missing = [p for p in (cfg.cram, cfg.reference, cfg.index) if p and not Path(p).exists()]
+    if not missing:
+        return
+    lines = ["missing input file(s):", *(f"  {p}" for p in missing)]
+    if any(Path(p) in defaults for p in missing):
+        lines.append("\nThese are the default Park Lab COLO829T test files -- "
+                     "download them with:\n  chromcov fetch inputs")
+    else:
+        lines.append("\nCheck the paths given via --config / --cram / --reference.")
+    raise click.UsageError("\n".join(lines))
 
 # ==============================================================================
 # SETUP FUNCS
@@ -156,6 +177,7 @@ def coverage(cram, reference, index, min_mapq, config, chroms, full, window, str
 
     cfg = _load(config, cram=cram, reference=reference, index=index, min_mapq=min_mapq,
                 chroms=chroms, window=window, strata=strata_map, outdir=outdir)
+    _require_inputs(cfg)
 
     # ------------------------------------------------------------------------------
     # Mean-only return
@@ -266,7 +288,21 @@ def gen_config_cmd(output, force) -> None:
 # ==============================================================================
 @main.group(name="fetch")
 def fetch_group() -> None:
-    """Download inputs a clean clone needs (callability strata, ...)."""
+    """Download data a clean clone needs (COLO829T inputs, callability strata)."""
+
+@fetch_group.command(name="inputs")
+@click.option("--dest", type=click.Path(file_okay=False), default=fetch.DATA_DIR,
+              help=f"directory to download into (default: ./{fetch.DATA_DIR})")
+@click.option("--force", is_flag=True, help="re-download even if the files exist")
+def fetch_inputs_cmd(dest, force) -> None:
+    """Download the Park Lab COLO829T test CRAM, its .crai index, and the GRCh38
+    reference FASTA (large -- tens of GB). These are the config defaults, so a bare
+    `chromcov coverage` runs on them afterward."""
+    fetch.fetch_inputs(dest, force=force)
+    hint = "  chromcov coverage" if str(dest) in (fetch.DATA_DIR, f"./{fetch.DATA_DIR}") else (
+        f"  chromcov coverage --cram {dest}/{fetch.PARKLAB_INPUTS['cram']} "
+        f"--reference {dest}/{fetch.PARKLAB_INPUTS['reference']}")
+    click.echo("\nrun with:\n" + hint)
 
 @fetch_group.command(name="strata")
 @click.option("--dest", type=click.Path(file_okay=False), default="data",

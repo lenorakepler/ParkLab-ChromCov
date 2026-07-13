@@ -19,6 +19,16 @@ No `uv`? `pip install -e .` (into an activated venv) works too.
 
 Prefer not to activate? Prefix any command below with `uv run`, e.g. `uv run chromcov coverage --config config.yaml`. To put `chromcov` on your PATH globally instead, `uv tool install --editable .` (note: this resolves fresh and does not use `uv.lock`).
 
+## Getting the data
+
+The tool defaults to the Park Lab COLO829T test files under `data/`. If your clone doesn't already have them, download them (the CRAM + reference are large -- tens of GB):
+
+```bash
+chromcov fetch inputs   # -> data/COLO829T_TEST.cram (+ .crai) and the GRCh38 reference
+```
+
+Once fetched, a bare `chromcov coverage` runs on them with no flags. Point `--cram` / `--reference` (or the config's `inputs:` block) elsewhere to run on your own data.
+
 ## Usage
 
 By default, the the coverage calculation excludes unmapped, secondary, and supplementary reads. Since COLO829T is a cancer cell line, does not filter out duplicated reads. Overlapping mate pairs handled by the `pysam.AlignedSegment.get_blocks()`
@@ -33,14 +43,18 @@ chromcov gen-config [-o config.yaml]
 
 ### Quick, no-frills
 
-At its simplest, one can use program defaults and just point to the CRAM and reference files. The program will output per-chromosome mean coverage to stdout.
+At its simplest, one can use program defaults, which point at the bundled COLO829T test files under `data/`. The program will output per-chromosome mean coverage to stdout.
 
 ```bash
+# runs on the default data/ inputs -- no flags needed
+chromcov coverage
+
+# point at your own CRAM + reference
 chromcov coverage \
   --cram data/COLO829T_TEST.cram \
   --reference data/GCA_000001405.15_GRCh38_no_alt_analysis_set.fa
 
-# Or use default config
+# or drive everything from a config file
 chromcov coverage --config config.yaml
 ```
 
@@ -90,26 +104,31 @@ Run `--full` with `--window N`
 
 ## Code files
 
-| path                    | description                                                           |
-| ----------------------- | --------------------------------------------------------------------- |
-| `chromcov/coverage.py`  | Creates per-chromosome mean coverage table                            |
-| `chromcov/calc_cov.py`  | The coverage calculation itself (event-based, O(reads))               |
-| `chromcov/config.py`    | Config, including read flags                                          |
-| `chromcov/report.py`    | Extended statistics report tables                                     |
-| `chromcov/qc_report.py` | `--full` orchestration                                                |
-| `chromcov/depth.py`     | per-base reductions: `ChromDepth` · `DepthHistogram` · `ChromStats`   |
-| `chromcov/qc_flags.py`  | QC abnormality flags (user-defined values in config)                  |
-| `chromcov/strata.py`    | SMaHT easy/difficult/extreme callability tiers + masks                |
-| `chromcov/plots.py`     | Bar and scatter coverage plots                                        |
-| `chromcov/perbase.py`   | Generate bedgraphs + resume                                           |
-| `chromcov/validate.py`  | Ensure CRAM-Reference validity                                        |
-| `chromcov/fetch.py`     | download the SMaHT strata BEDs                                        |
-| `chromcov/cli.py`       | CLI (`coverage` / `plot` / `fetch`) +`run.json`                       |
-| `tests/`                | pytest: reduction/QC math + a synthetic-CRAM end-to-end coverage test |
+| path                       | description                                                             |
+| -------------------------- | ---------------------------------------------------------------------- |
+| `chromcov/kernel.py`       | The coverage calculation itself — `calc_cov`, event-based, O(reads)    |
+| `chromcov/filtering.py`    | SAM read-flag vocabulary + per-read `ReadFilter` (`-Q`/`-f`/`-F`/`-G`) |
+| `chromcov/reduce.py`       | Per-base reductions: `ChromDepth` · `DepthHistogram` · `ChromStats`    |
+| `chromcov/pipeline.py`     | Single orchestrator: source → reduce → accumulate (mean & `--full`)    |
+| `chromcov/result.py`       | `RunResult` — the accumulator a run folds into                         |
+| `chromcov/policy.py`       | Coverage-QC policy: diploid baseline, copy number, abnormality flags   |
+| `chromcov/categories.py`   | SMaHT easy/difficult/extreme callability tiers + masks                 |
+| `chromcov/preflight.py`    | Input validation: sorted CRAM, index present, reference matches        |
+| `chromcov/io/alignment.py` | CRAM access: context-managed reader, contig listing + lengths          |
+| `chromcov/io/codec.py`     | Reference verification (CRAM `@SQ` M5 vs reference MD5)                 |
+| `chromcov/io/track.py`     | Per-base depth track I/O (RLE `bedgraph.gz`); the resume boundary       |
+| `chromcov/io/fetch.py`     | Download the COLO829T inputs + SMaHT strata BEDs                        |
+| `chromcov/config/schema.py`| Pydantic run-config — the sole source of field truth                   |
+| `chromcov/config/template.py`| Generate the editable config YAML from the live model (`gen-config`) |
+| `chromcov/present/frames.py`| Assemble + write coverage tables (polars); `--full` output orchestration |
+| `chromcov/present/plots.py`| Bar and scatter coverage plots (headless Agg)                          |
+| `chromcov/present/sidecar.py`| `run.json` provenance sidecar (resolved config + code state)         |
+| `chromcov/cli.py`          | CLI (`coverage` / `plot` / `fetch` / `gen-config`)                     |
+| `tests/`                   | pytest: reduction/QC math + synthetic-CRAM end-to-end + mosdepth compare |
 
 ## Write-Up
 
-The main thing is a custom function to calculate coverage (calc_cov.py calc_cov). It uses the same algorithm as mosdepth, where instead of recording and summing every read at every position, O(depth \* reference positions) it instead records the start and end of each read, ~O(reads). It adds +1 to the first reference position a read covers a -1 to the first position it does *not* cover. A cumulative sum (truly it's like magic) yields the total coverage at each base in the reference genome.
+The main thing is a custom function to calculate coverage (kernel.py calc_cov). It uses the same algorithm as mosdepth, where instead of recording and summing every read at every position, O(depth \* reference positions) it instead records the start and end of each read, ~O(reads). It adds +1 to the first reference position a read covers a -1 to the first position it does *not* cover. A cumulative sum (truly it's like magic) yields the total coverage at each base in the reference genome.
 
 I tried to look at where this metric might be integrated into existing workflows by examining both the Park Lab repo and the SMaHT DAC repo. This confirmed my suspicion that per-chromosome coverage is a broad QC metric that is unlikely to be used as input into any downstream analyses. This statistic can be used to confirm at larger scales to confirm that target depth is adequate and on a per-sample basis to surface gross, large-scale feature estimates like aneuploidy and the sex-chromosome complement that might themselves be verifying QC signals or, alternately, previously-unknown features that might bias results or be worthy of further investigation.
 
