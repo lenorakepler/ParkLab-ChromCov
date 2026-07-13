@@ -3,8 +3,8 @@ chromcov command-line interface (Click)
 
     # DEFAULT: per-chromosome mean table, no per-base output
     # ---------------------------------------------------------------
-    chromcov coverage --cram ... --reference ... -o ...
-    (leave out -o for stdout)
+    chromcov coverage --cram ... --reference ... -t ...
+    (leave out -t for stdout)
 
     # EXTRAS: output per-base tracks, stats, plots, stratification
               this is also resume-able given an existing directory
@@ -32,6 +32,7 @@ CLI override, and the provenance sidecar are delegated to their modules.
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 
 import click
@@ -105,6 +106,46 @@ def _emit(rows, output) -> None:
     click.echo(f"wrote {target}", err=True)
 
 
+_PHASES = {"scan": "scanning", "depth": "per-base depth", "reduce": "reducing tracks"}
+
+def _fmt_dur(secs: float) -> str:
+    """Seconds -> compact human duration (e.g. '45s', '3m20s', '1h05m')."""
+    secs = int(secs)
+    if secs < 60:
+        return f"{secs}s"
+    m, s = divmod(secs, 60)
+    if m < 60:
+        return f"{m}m{s:02d}s"
+    h, m = divmod(m, 60)
+    return f"{h}h{m:02d}m"
+
+def _progress():
+    """A pipeline progress hook that reports per-contig activity on stderr (stdout
+    stays reserved for the coverage table). `done == 0` is the phase banner; each
+    later call names the contig now being worked on, plus an ETA extrapolated from
+    bases processed so far (work scales with contig length). Contigs run
+    smallest-first, so the first estimate lands within seconds. Plain lines (no
+    in-place rewrite) so output flushes immediately and reads fine in logs too."""
+    st = {"t0": 0.0, "done_bp": 0, "total_bp": 0}
+    def report(done: int, total: int, chrom: str, phase: str,
+               nbases: int = 0, total_bases: int = 0) -> None:
+        now = time.monotonic()
+        if done == 0:
+            st.update(t0=now, done_bp=0, total_bp=total_bases)
+            gb = f", {total_bases/1e9:.2f} Gbp" if total_bases else ""
+            click.echo(f"[{_PHASES.get(phase, phase)}] {total} contig(s){gb}", err=True)
+            return
+        eta = ""
+        elapsed = now - st["t0"]
+        if st["done_bp"] and st["total_bp"] and elapsed > 0:
+            rate = st["done_bp"] / elapsed                       # bp/sec, from finished contigs
+            remaining = max(st["total_bp"] - st["done_bp"], 0)
+            eta = f"  ~{_fmt_dur(remaining / rate)} left" if rate else ""
+        click.echo(f"  ({done}/{total}) {chrom}{eta}", err=True)
+        st["done_bp"] += nbases
+    return report
+
+
 def input_options(func):
     func = click.option("--cram", type=click.Path(exists=True, dir_okay=False),
                         default=None, help="path to the CRAM")(func)
@@ -145,10 +186,11 @@ def main() -> None:
 @click.option("--force", is_flag=True, help="[--full] recompute tracks even if present")
 @click.option("--outdir", type=click.Path(file_okay=False), default=None,
               help="[--full] output root (default: ./out); tracks -> <outdir>/perbase/")
-@click.option("--output", "-o", default=None,
-              help="write the mean table to FILE ('-' for stdout; the default)")
+@click.option("--tableout", "-t", "tableout", default=None,
+              help="write the per-chromosome mean table to FILE ('-' for stdout; "
+                   "the default). Distinct from --outdir, which is the --full run root.")
 def coverage(cram, reference, index, min_mapq, config, chroms, full, window, strata,
-             strata_dir, jobs, force, outdir, output) -> None:
+             strata_dir, jobs, force, outdir, tableout) -> None:
     """
     Per-chromosome average coverage.
 
@@ -183,8 +225,8 @@ def coverage(cram, reference, index, min_mapq, config, chroms, full, window, str
     # Mean-only return
     # ------------------------------------------------------------------------------
     if not full:
-        result = pipeline_run(cfg, depth=Depth.MEAN, jobs=jobs)
-        _emit(result.coverage_rows(), output)
+        result = pipeline_run(cfg, depth=Depth.MEAN, jobs=jobs, progress=_progress())
+        _emit(result.coverage_rows(), tableout)
         return
 
     # ------------------------------------------------------------------------------
@@ -195,9 +237,10 @@ def coverage(cram, reference, index, min_mapq, config, chroms, full, window, str
         cfg, depth=Depth.FULL, 
         source=Source.ALIGNMENT,
         jobs=jobs,
-        force=force, 
-        bedgraph_dir=bedgraph_dir, 
-        categories=Strata.from_arg(cfg.strata)
+        force=force,
+        bedgraph_dir=bedgraph_dir,
+        categories=Strata.from_arg(cfg.strata),
+        progress=_progress(),
         )
     click.echo(f"[preflight] {result.preflight['reference_check']['status']}", err=True)
 
@@ -205,8 +248,8 @@ def coverage(cram, reference, index, min_mapq, config, chroms, full, window, str
     outdir_p = Path(cfg.outdir)
     written = frames.write_outputs(result, outdir_p)
     sidecar.write_run_sidecar(outdir_p / RUN_SIDECAR, result, config)
-    if output:
-        _emit(result.coverage_rows(), output)
+    if tableout:
+        _emit(result.coverage_rows(), tableout)
 
     for line in frames.summary_lines(result):
         click.echo(line, err=True)
@@ -244,7 +287,8 @@ def plot(outdir) -> None:
 
     # Aggregate existing bedgraphs and load into a Result
     result = pipeline_run(cfg, depth=Depth.FULL, source=Source.TRACKS,
-                          bedgraph_dir=outdir_p / "perbase", categories=Strata.from_arg(cfg.strata))
+                          bedgraph_dir=outdir_p / "perbase",
+                          categories=Strata.from_arg(cfg.strata), progress=_progress())
     
     if not result.chroms:
         raise click.UsageError(f"no per-base tracks under {outdir_p / 'perbase'}/")

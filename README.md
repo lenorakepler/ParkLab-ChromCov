@@ -56,7 +56,12 @@ chromcov coverage \
 
 # or drive everything from a config file
 chromcov coverage --config config.yaml
+
+# save the table to a file instead of stdout (-t / --tableout)
+chromcov coverage --config config.yaml -t coverage.tsv
 ```
+
+Progress (which contig is being worked on, plus a rough ETA) is printed to stderr, so it stays out of the way when you pipe the table on stdout to a file.
 
 ### More-context QC (`--full`) -- a little more fun!
 

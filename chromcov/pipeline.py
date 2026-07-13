@@ -76,10 +76,14 @@ def _compute_worker(args) -> str:
 #  Dispatch to different pipelines to calculate or read previously calculated
 #  coverage info from specified chromosomes and return the accumulated RunResult.
 # ==============================================================================
+def _noop_progress(done: int, total: int, chrom: str, phase: str,
+                   nbases: int = 0, total_bases: int = 0) -> None:
+    """Default progress hook: does nothing (silent, matches prior behaviour)."""
+
 def run(cfg, *, depth: Depth = Depth.MEAN, source: Source = Source.ALIGNMENT,
         jobs: int = 1, force: bool = False, bedgraph_dir=None,
         categories: Strata | None = None, chroms: list[str] | None = None,
-        skip_preflight: bool = False) -> RunResult:
+        skip_preflight: bool = False, progress=None) -> RunResult:
     """
     Calculate or fetch coverage for selected chromosomes and return a pooled RunResult.
 
@@ -87,11 +91,14 @@ def run(cfg, *, depth: Depth = Depth.MEAN, source: Source = Source.ALIGNMENT,
                        -> Depth.FULL -> Calculate mean per base, save as bedgraph
 
     Source = TRACKS    ->               Get per base coverage info from bedgraphs
-                                        
+
 
     Kept free of argparse/IO-formatting so tests/workflows can call it directly.
     `jobs > 1` computes contigs in parallel (each worker opens its own handle).
+    `progress`, if given, is called `progress(done, total, chrom, phase)` after each
+    contig -- the CLI uses it to render a status line; callers that want silence omit it.
     """
+    report = progress or _noop_progress
 
     # Get stratification categories
     cats = categories if categories is not None else Strata.from_arg(cfg.strata)
@@ -115,58 +122,88 @@ def run(cfg, *, depth: Depth = Depth.MEAN, source: Source = Source.ALIGNMENT,
 
     # If just getting mean chrom. depth, calc and return.
     if depth is Depth.MEAN:
-        _run_mean(cfg, result, contig_list, lengths, jobs)
+        _run_mean(cfg, result, contig_list, lengths, jobs, report)
         return result
 
-    # If doing full, get + save per-base coverage for all chromosomes that do not 
+    # If doing full, get + save per-base coverage for all chromosomes that do not
     # currently have an output bedgraph file
     if source is Source.ALIGNMENT:
-        _ensure_tracks(cfg, contig_list, bedgraph_dir, jobs, force)
-    
-    # 
-    _reduce_tracks(result, contig_list, lengths, bedgraph_dir)
+        _ensure_tracks(cfg, contig_list, lengths, bedgraph_dir, jobs, force, report)
+
+    #
+    _reduce_tracks(result, contig_list, lengths, bedgraph_dir, report)
     policy.finalize(result)
     return result
 
-def _run_mean(cfg, result, contigs, lengths, jobs) -> None:
+def _run_mean(cfg, result, contigs, lengths, jobs, report) -> None:
     """
     MEAN source: per-contig aligned-base totals, no tracks, no vector.
     """
+    total = len(contigs)
+    total_bp = sum(lengths.get(c, 0) for c in contigs)
+    report(0, total, "", "scan", total_bases=total_bp)
     if jobs and jobs > 1:
+        # Parallel: results arrive as workers finish, so report on completion.
         with ProcessPoolExecutor(max_workers=jobs) as ex:
-            for chrom, length, bases in ex.map(_mean_partition, [(cfg, c) for c in contigs]):
+            for done, (chrom, length, bases) in enumerate(
+                    ex.map(_mean_partition, [(cfg, c) for c in contigs]), 1):
                 result.add_mean(chrom, length, bases)
+                report(done, total, chrom, "scan", nbases=length)
         return
-    
+
     # Serial: reuse a single open handle across contigs (cheaper for many contigs).
+    # Announce each contig BEFORE scanning it -- a single contig can take a while,
+    # so reporting on completion would look like a stall.
     rf = ReadFilter.from_config(cfg)
     with alignment.open_alignment(cfg) as reader:
-        for chrom in contigs:
+        for i, chrom in enumerate(contigs, 1):
+            report(i, total, chrom, "scan", nbases=lengths.get(chrom, 0))
             _, total_depth, _ = calc_cov(reader, chrom, rf, per_base=False)
             result.add_mean(chrom, lengths[chrom], int(total_depth))
 
-def _ensure_tracks(cfg, contigs, bedgraph_dir, jobs, force) -> None:
+def _ensure_tracks(cfg, contigs, lengths, bedgraph_dir, jobs, force, report) -> None:
     """
     Write per-base RLE tracks for every contig missing one (or all, if force).
     Resumable: an existing track is not recomputed.
+
+    Contigs are computed SMALLEST-FIRST: per-base depth for a whole contig is the
+    slow step, so finishing a tiny contig early gives the caller a bp/sec rate (and
+    thus a usable ETA) within seconds instead of after all of chr1. This reorders
+    only the on-disk compute; the table is built later in `_reduce_tracks`, which
+    iterates the natural contig order -- so output ordering is unaffected.
     """
     Path(bedgraph_dir).mkdir(parents=True, exist_ok=True)
     todo = [c for c in contigs if force or not track.has_bedgraph(bedgraph_dir, c)]
-    if not todo:
+    todo.sort(key=lambda c: lengths.get(c, 0))
+    total = len(todo)
+    if not total:
         return
+    total_bp = sum(lengths.get(c, 0) for c in todo)
+    report(0, total, "", "depth", total_bases=total_bp)
     if jobs and jobs > 1:
+        # Parallel: report as each worker's track lands (submission order == result
+        # order, so smallest-first still yields the first ETA fastest).
         args = [(cfg, c, str(bedgraph_dir), force) for c in todo]
         with ProcessPoolExecutor(max_workers=jobs) as ex:
-            list(ex.map(_compute_worker, args))
+            for done, chrom in enumerate(ex.map(_compute_worker, args), 1):
+                report(done, total, chrom, "depth", nbases=lengths.get(chrom, 0))
     else:
-        for c in todo:
+        # Serial: announce each contig BEFORE computing it -- otherwise a large
+        # contig looks like a hang.
+        for i, c in enumerate(todo, 1):
+            report(i, total, c, "depth", nbases=lengths.get(c, 0))
             compute_partition(cfg, c, bedgraph_dir, force=force)
 
-def _reduce_tracks(result, contigs, lengths, bedgraph_dir) -> None:
+def _reduce_tracks(result, contigs, lengths, bedgraph_dir, report) -> None:
     """
     Separate reduce pass: re-read each track and fold it into the result. Serial
     in the main process (matches the in-place accumulation the reductions expect).
     """
-    for chrom in (c for c in contigs if c in lengths):
+    items = [c for c in contigs if c in lengths]
+    total = len(items)
+    total_bp = sum(lengths[c] for c in items)
+    report(0, total, "", "reduce", total_bases=total_bp)
+    for i, chrom in enumerate(items, 1):
+        report(i, total, chrom, "reduce", nbases=lengths[chrom])
         base_depth = track.read_bedgraph(track.bedgraph_path(bedgraph_dir, chrom), lengths[chrom])
         result.reduce_chrom(chrom, lengths[chrom], base_depth)
