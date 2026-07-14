@@ -76,10 +76,12 @@ This writes, under `out/`:
 | file                                | description                                                                             |
 | ----------------------------------- | --------------------------------------------------------------------------------------- |
 | `perbase/chrN.per-base.bedgraph.gz` | per-base depth, one per chromosome                                                      |
+| `reduced/chrN.npz`                  | cached per-contig reduced intermediate; lets `plot` skip re-reducing (safe to delete)   |
 | `coverage.tsv`                      | extended coverage statistics table: mean, median, IQR, MAD, breadth-at-deapth, QC flags |
 | `coverage.windows.bed`              | windowed mean depth + copy number + focal flag along the genome                         |
 | `coverage.bar.png`                  | mean depth per chromosome                                                               |
-| `coverage.scatter.png`              | windowed copy number, colored by callability tier                                       |
+| `coverage.scatter.png`              | windowed copy number over a cytoband ideogram, colored by callability tier              |
+| `coverage.scatter.html`             | same scatter as a self-contained interactive Plotly page (hover, zoom, pan)             |
 | `run.json`                          | the resolved config + code state, so the run reproduces from the output dir alone       |
 
 ### Other options
@@ -114,6 +116,7 @@ Run `--full` with `--window N`
 | `chromcov/kernel.py`       | The coverage calculation itself — `calc_cov`, event-based, O(reads)    |
 | `chromcov/filtering.py`    | SAM read-flag vocabulary + per-read `ReadFilter` (`-Q`/`-f`/`-F`/`-G`) |
 | `chromcov/reduce.py`       | Per-base reductions: `ChromDepth` · `DepthHistogram` · `ChromStats`    |
+| `chromcov/reduce_cache.py` | Per-contig reduced-intermediate cache so `plot` reuses reductions      |
 | `chromcov/pipeline.py`     | Single orchestrator: source → reduce → accumulate (mean & `--full`)    |
 | `chromcov/result.py`       | `RunResult` — the accumulator a run folds into                         |
 | `chromcov/policy.py`       | Coverage-QC policy: diploid baseline, copy number, abnormality flags   |
@@ -126,7 +129,7 @@ Run `--full` with `--window N`
 | `chromcov/config/schema.py`| Pydantic run-config — the sole source of field truth                   |
 | `chromcov/config/template.py`| Generate the editable config YAML from the live model (`gen-config`) |
 | `chromcov/present/frames.py`| Assemble + write coverage tables (polars); `--full` output orchestration |
-| `chromcov/present/plots.py`| Bar and scatter coverage plots (headless Agg)                          |
+| `chromcov/present/plots.py`| Bar plot (matplotlib/Agg) + copy-number scatter with cytoband ideogram (Plotly: PNG + interactive HTML) |
 | `chromcov/present/sidecar.py`| `run.json` provenance sidecar (resolved config + code state)         |
 | `chromcov/cli.py`          | CLI (`coverage` / `plot` / `fetch` / `gen-config`)                     |
 | `tests/`                   | pytest: reduction/QC math + synthetic-CRAM end-to-end + mosdepth compare |

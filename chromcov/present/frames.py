@@ -147,10 +147,11 @@ def write_outputs(result, outdir: str | Path) -> dict[str, Path]:
         written["bar"] = bar
         min_easy = result.cfg.scatter_min_easy_frac if "easy" in result.strata_hist else 0.0
         scatter = outdir / "coverage.scatter.png"
-        plots.scatter_windows(result.win_rows, scatter, baseline=baseline,
-                              ploidy=result.cfg.ploidy, min_easy_frac=min_easy,
-                              cap_cn=result.cfg.scatter_cap_cn)
-        written["scatter"] = scatter
+        scatter_out = plots.scatter_windows(result.win_rows, scatter, baseline=baseline,
+                                            ploidy=result.cfg.ploidy, min_easy_frac=min_easy,
+                                            cap_cn=result.cfg.scatter_cap_cn)
+        written["scatter"] = scatter_out["png"]
+        written["scatter_html"] = scatter_out["html"]
 
     return written
 
