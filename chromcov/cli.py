@@ -234,11 +234,12 @@ def coverage(cram, reference, index, min_mapq, config, chroms, full, window, str
     # ------------------------------------------------------------------------------
     bedgraph_dir = Path(cfg.outdir) / "perbase"
     result = pipeline_run(
-        cfg, depth=Depth.FULL, 
+        cfg, depth=Depth.FULL,
         source=Source.ALIGNMENT,
         jobs=jobs,
         force=force,
         bedgraph_dir=bedgraph_dir,
+        cache_dir=Path(cfg.outdir) / "reduced",
         categories=Strata.from_arg(cfg.strata),
         progress=_progress(),
         )
@@ -265,14 +266,16 @@ def coverage(cram, reference, index, min_mapq, config, chroms, full, window, str
 @main.command()
 @click.option("--outdir", type=click.Path(file_okay=False), default="out",
               help="a --full run dir (holds run.json + perbase/); default ./out")
-def plot(outdir) -> None:
+@click.option("--force", is_flag=True,
+              help="ignore the reduced cache and re-reduce every track from perbase/")
+def plot(outdir, force) -> None:
     """
     (Re)build the tables and plots from the tracks already under --outdir.
 
-    Reads the run's config from run.json and reduces whatever contigs have a track
-    in perbase/ -- so running more contigs (coverage --full ...) and then `plot`
-    updates the graphs, with the copy-number baseline recomputed over every contig
-    present. No CRAM needed.
+    Reads the run's config from run.json. Contigs already reduced (cached under
+    <outdir>/reduced/) are reused, so re-plotting does NO reduce work; only contigs
+    with a new track in perbase/ are reduced. The copy-number baseline is recomputed
+    over every contig present. No CRAM needed. Use --force to re-reduce from scratch.
     """
 
     # Load sidecar -- fail if none exists
@@ -282,20 +285,22 @@ def plot(outdir) -> None:
         raise click.UsageError(
             f"no {RUN_SIDECAR} under {outdir_p}/ -- run `chromcov coverage --full "
             f"--outdir {outdir}` first")
-    
+
     cfg = Config.model_validate(json.loads(sidecar_path.read_text())["config"])
 
-    # Aggregate existing bedgraphs and load into a Result
+    # Reduce (cache-aware) then build the tables + plots. Cached contigs are folded
+    # in without touching their per-base track.
     result = pipeline_run(cfg, depth=Depth.FULL, source=Source.TRACKS,
                           bedgraph_dir=outdir_p / "perbase",
+                          cache_dir=outdir_p / "reduced", force=force,
                           categories=Strata.from_arg(cfg.strata), progress=_progress())
-    
+
     if not result.chroms:
         raise click.UsageError(f"no per-base tracks under {outdir_p / 'perbase'}/")
-    
+
     # Output stats summaries and plots
     written = frames.write_outputs(result, outdir_p)
-    
+
     # Output stats to stdout
     for line in frames.summary_lines(result):
         click.echo(line, err=True)

@@ -21,6 +21,22 @@ from .reduce import ChromDepth, ChromStats, DepthHistogram
 
 
 @dataclass
+class ReducedContig:
+    """One contig's reduced intermediate -- the unit produced by `_reduce_one` and
+    consumed by `fold`. Compact (histograms + windowed rows, no per-base vector),
+    so it is what gets cached to disk to make re-plotting skip the reduce pass."""
+    chrom: str
+    length: int
+    bases: int
+    is_auto: bool
+    hist: DepthHistogram
+    strata_hist: dict[str, DepthHistogram]
+    strata_bp: dict[str, int]
+    easy_hist: DepthHistogram | None       # easy-masked, autosomes only (baseline input)
+    win_rows: list[dict]
+
+
+@dataclass
 class RunResult:
     cfg: object
     depth: object = None                     # a pipeline.Depth (kept untyped to avoid a cycle)
@@ -58,35 +74,37 @@ class RunResult:
         self.lengths[chrom] = length
         self.bases[chrom] = bases
 
-    def reduce_chrom(self, chrom: str, length: int, base_depth: np.ndarray) -> None:
+    def reduce_chrom(self, chrom: str, length: int, base_depth: np.ndarray) -> ReducedContig:
         """
-        Reduce one contig's per-base vector to hist + windows (+ categories),
-        accumulate the pooled histograms, then drop the vector (the FULL path).
+        Reduce one contig's per-base vector and fold it in (the FULL path). Returns
+        the per-contig intermediate so callers (the cache) can persist it.
         """
-        total_depth = int(base_depth.sum())
+        rc = self._reduce_one(chrom, length, base_depth)
+        self.fold(rc)
+        return rc
+
+    def _reduce_one(self, chrom: str, length: int, base_depth: np.ndarray) -> ReducedContig:
+        """Pure reduction of one contig's per-base vector to a ReducedContig (hist +
+        per-category hists + windowed rows). No accumulation -- see `fold`."""
         depth = ChromDepth(base_depth, cap=self.cfg.hist_cap,
                            breadth_thresholds=self.cfg.breadth_thresholds)
-
         hist = depth.histogram()
-        self.chroms.append(chrom)
-        self.per_chrom_stats[chrom] = hist.stats()
-        self.lengths[chrom] = length
-        self.bases[chrom] = total_depth
-
-        if is_autosome(chrom):
-            self.autosomal_hist = hist if self.autosomal_hist is None else self.autosomal_hist + hist
+        auto = is_autosome(chrom)
 
         masks: dict[str, np.ndarray] = {}
+        strata_hist: dict[str, DepthHistogram] = {}
+        strata_bp: dict[str, int] = {}
+        easy_hist: DepthHistogram | None = None
         for label in self.categories.labels():
             mask = self.categories.mask(label, chrom, length)
             if mask is None:
                 continue
             masks[label] = mask
             h = depth.masked(mask).histogram()
-            self.strata_hist[label] = h if label not in self.strata_hist else self.strata_hist[label] + h
-            self.strata_bp[label] += int(mask.sum())
-            if label == "easy" and is_autosome(chrom):
-                self.easy_autosomal_hist = h if self.easy_autosomal_hist is None else self.easy_autosomal_hist + h
+            strata_hist[label] = h
+            strata_bp[label] = int(mask.sum())
+            if label == "easy" and auto:
+                easy_hist = h
 
         starts, ends, means = depth.windowed_means(self.cfg.window)
         widths = ends - starts
@@ -102,10 +120,31 @@ class RunResult:
             dom = [order[i] for i in np.vstack([fracs[label] for label in order]).argmax(axis=0).tolist()]
         else:
             dom = [""] * len(means)
-        for s, e, m, f, st in zip(starts.tolist(), ends.tolist(), means.tolist(),
-                                  easy_ef.tolist(), dom):
-            self.win_rows.append({"chrom": chrom, "start": s, "end": e, "mean": m,
-                                  "easy_frac": f, "stratum": st})
+        win_rows = [{"chrom": chrom, "start": s, "end": e, "mean": m, "easy_frac": f, "stratum": st}
+                    for s, e, m, f, st in zip(starts.tolist(), ends.tolist(), means.tolist(),
+                                              easy_ef.tolist(), dom)]
+
+        return ReducedContig(chrom=chrom, length=length, bases=int(base_depth.sum()),
+                             is_auto=auto, hist=hist, strata_hist=strata_hist,
+                             strata_bp=strata_bp, easy_hist=easy_hist, win_rows=win_rows)
+
+    def fold(self, rc: ReducedContig) -> None:
+        """Accumulate a ReducedContig (freshly reduced or loaded from cache) into the
+        pooled histograms, per-chrom stats, and windowed rows."""
+        self.chroms.append(rc.chrom)
+        self.per_chrom_stats[rc.chrom] = rc.hist.stats()
+        self.lengths[rc.chrom] = rc.length
+        self.bases[rc.chrom] = rc.bases
+
+        if rc.is_auto:
+            self.autosomal_hist = rc.hist if self.autosomal_hist is None else self.autosomal_hist + rc.hist
+        for label, h in rc.strata_hist.items():
+            self.strata_hist[label] = h if label not in self.strata_hist else self.strata_hist[label] + h
+            self.strata_bp[label] += rc.strata_bp[label]
+        if rc.easy_hist is not None:
+            self.easy_autosomal_hist = rc.easy_hist if self.easy_autosomal_hist is None \
+                else self.easy_autosomal_hist + rc.easy_hist
+        self.win_rows.extend(rc.win_rows)
 
     # --- views over the accumulated state ----------------------------------
 

@@ -81,7 +81,12 @@ class DepthHistogram:
     def __add__(self, other) -> "DepthHistogram":
         if other is None or (isinstance(other, int) and other == 0):
             return DepthHistogram(self.counts.copy(), self.breadth_thresholds)
-        return DepthHistogram(self.counts + other.counts, self.breadth_thresholds)
+        a, b = self.counts, other.counts
+        if a.size != b.size:   # cached per-contig histograms are trimmed to their own
+            n = max(a.size, b.size)   # max depth; pad the shorter before pooling
+            a = np.pad(a, (0, n - a.size))
+            b = np.pad(b, (0, n - b.size))
+        return DepthHistogram(a + b, self.breadth_thresholds)
 
     def __radd__(self, other) -> "DepthHistogram":   # enables sum([...])
         return self.__add__(other)

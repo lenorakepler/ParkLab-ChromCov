@@ -25,7 +25,7 @@ import enum
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
-from . import policy, preflight
+from . import policy, preflight, reduce_cache
 from .filtering import ReadFilter
 from .io import alignment, track
 from .kernel import calc_cov
@@ -81,7 +81,7 @@ def _noop_progress(done: int, total: int, chrom: str, phase: str,
     """Default progress hook: does nothing (silent, matches prior behaviour)."""
 
 def run(cfg, *, depth: Depth = Depth.MEAN, source: Source = Source.ALIGNMENT,
-        jobs: int = 1, force: bool = False, bedgraph_dir=None,
+        jobs: int = 1, force: bool = False, bedgraph_dir=None, cache_dir=None,
         categories: Strata | None = None, chroms: list[str] | None = None,
         skip_preflight: bool = False, progress=None) -> RunResult:
     """
@@ -131,7 +131,8 @@ def run(cfg, *, depth: Depth = Depth.MEAN, source: Source = Source.ALIGNMENT,
         _ensure_tracks(cfg, contig_list, lengths, bedgraph_dir, jobs, force, report)
 
     #
-    _reduce_tracks(result, contig_list, lengths, bedgraph_dir, report)
+    _reduce_tracks(result, contig_list, lengths, bedgraph_dir, report,
+                   cache_dir=cache_dir, force=force)
     policy.finalize(result)
     return result
 
@@ -194,16 +195,30 @@ def _ensure_tracks(cfg, contigs, lengths, bedgraph_dir, jobs, force, report) -> 
             report(i, total, c, "depth", nbases=lengths.get(c, 0))
             compute_partition(cfg, c, bedgraph_dir, force=force)
 
-def _reduce_tracks(result, contigs, lengths, bedgraph_dir, report) -> None:
+def _reduce_tracks(result, contigs, lengths, bedgraph_dir, report,
+                   cache_dir=None, force=False) -> None:
     """
-    Separate reduce pass: re-read each track and fold it into the result. Serial
-    in the main process (matches the in-place accumulation the reductions expect).
+    Separate reduce pass: fold each contig into the result. Serial in the main
+    process (matches the in-place accumulation the reductions expect).
+
+    Cache-aware: a contig whose reduced intermediate is cached (and matches the
+    current reduce config) is loaded instead of re-reading and re-reducing its
+    per-base track -- so re-plotting an existing run does no reduce work, and a run
+    that adds contigs only reduces the new ones. Freshly reduced contigs are cached.
     """
     items = [c for c in contigs if c in lengths]
     total = len(items)
     total_bp = sum(lengths[c] for c in items)
     report(0, total, "", "reduce", total_bases=total_bp)
+    key = reduce_cache.cache_key(result.cfg, result.categories) if cache_dir else None
     for i, chrom in enumerate(items, 1):
         report(i, total, chrom, "reduce", nbases=lengths[chrom])
-        base_depth = track.read_bedgraph(track.bedgraph_path(bedgraph_dir, chrom), lengths[chrom])
-        result.reduce_chrom(chrom, lengths[chrom], base_depth)
+        rc = None
+        if cache_dir and not force:
+            rc = reduce_cache.load(cache_dir, chrom, key)
+        if rc is None:
+            base_depth = track.read_bedgraph(track.bedgraph_path(bedgraph_dir, chrom), lengths[chrom])
+            rc = result._reduce_one(chrom, lengths[chrom], base_depth)
+            if cache_dir:
+                reduce_cache.save(cache_dir, rc, key)
+        result.fold(rc)
