@@ -51,7 +51,7 @@ def test_native_matches_mosdepth_addon(tmp_path):
 
     subprocess.run(
         [sys.executable, str(_SCRIPT), "--cram", str(_CRAM), "--reference", str(_REF),
-         "--chrom", _CONTIG, "--outdir", str(tmp_path)],
+         "--chrom", _CONTIG, "--outdir", str(tmp_path), "--no-plots"],
         check=True,
     )
     with (tmp_path / "coverage.tsv").open() as fh:
