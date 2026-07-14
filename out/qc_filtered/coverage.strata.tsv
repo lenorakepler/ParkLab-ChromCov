@@ -1,0 +1,4 @@
+stratum   	 region_bp  	 pct_of_analyzed 	 mean  	 median 	 sd    	 cv    	 breadth_1x 	 breadth_10x 	 breadth_20x
+easy      	 2288053789 	 74.09           	 15.17 	 15.0   	 6.17  	 0.407 	 0.9961     	 0.8203      	 0.2278
+difficult 	 312382399  	 10.12           	 15.02 	 14.0   	 6.38  	 0.425 	 0.9889     	 0.808       	 0.2283
+extreme   	 487833644  	 15.8            	 4.66  	 0.0    	 22.68 	 4.867 	 0.379      	 0.2237      	 0.0548

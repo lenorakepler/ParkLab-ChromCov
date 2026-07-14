@@ -1,0 +1,192 @@
+{
+  "baseline": {
+    "source": "easy-autosomal median",
+    "value": 15.0
+  },
+  "chromosomes": [
+    "chr1",
+    "chr2",
+    "chr3",
+    "chr4",
+    "chr5",
+    "chr6",
+    "chr7",
+    "chr8",
+    "chr9",
+    "chr10",
+    "chr11",
+    "chr12",
+    "chr13",
+    "chr14",
+    "chr15",
+    "chr16",
+    "chr17",
+    "chr18",
+    "chr19",
+    "chr20",
+    "chr21",
+    "chr22",
+    "chrX",
+    "chrY",
+    "chrM"
+  ],
+  "code": {
+    "branch": "main",
+    "commit": "bbeeef88f921a003468e393f35c2f2967da7b732",
+    "describe": "bbeeef8-dirty",
+    "dirty": true
+  },
+  "config": {
+    "baseline": "easy-autosomal-median",
+    "breadth_thresholds": [
+      1,
+      5,
+      10,
+      15,
+      20,
+      30
+    ],
+    "chroms": null,
+    "cram": "data/COLO829T_TEST.cram",
+    "exclude_all_flags": 0,
+    "exclude_contigs": [
+      "*_alt",
+      "*_random",
+      "chrUn*",
+      "*_decoy",
+      "HLA*",
+      "chrEBV"
+    ],
+    "exclude_flags": 3844,
+    "hist_cap": 200000,
+    "include_contigs": [
+      "chr*"
+    ],
+    "include_flags": 0,
+    "index": "data/COLO829T_TEST.cram.crai",
+    "min_mapping_quality": 60,
+    "outdir": "/Users/lenorakepler/Documents/GitHub/ParkLab-ChromCov/out/qc_filtered",
+    "ploidy": 2,
+    "plots": true,
+    "qc": {
+      "depleted_cn": 0.25,
+      "extreme_median_mult": 5.0,
+      "gain_cn": 2.5,
+      "loss_cn": 1.5,
+      "min_breadth_20x": 0.7,
+      "min_median": 10.0,
+      "uneven_robust_cv": 0.5
+    },
+    "reference": "data/GCA_000001405.15_GRCh38_no_alt_analysis_set.fa",
+    "scatter_cap_cn": 6.0,
+    "scatter_min_easy_frac": 0.0,
+    "strata": {
+      "difficult": "data/SMaHT_difficult_hg38.bed.gz",
+      "easy": "data/SMaHT_easy_hg38.bed.gz",
+      "extreme": "data/SMaHT_extreme_hg38.bed.gz"
+    },
+    "verify_reference": "skip",
+    "window": 10000
+  },
+  "config_file": "/Users/lenorakepler/Documents/GitHub/ParkLab-ChromCov/qc.yaml",
+  "flagged": {
+    "chr1": [
+      "LOW_CALLABLE",
+      "UNEVEN"
+    ],
+    "chr10": [
+      "CN_LOSS",
+      "LOW_CALLABLE"
+    ],
+    "chr11": [
+      "LOW_CALLABLE"
+    ],
+    "chr12": [
+      "LOW_CALLABLE"
+    ],
+    "chr13": [
+      "LOW_CALLABLE"
+    ],
+    "chr14": [
+      "LOW_CALLABLE"
+    ],
+    "chr15": [
+      "CN_LOSS",
+      "LOW_CALLABLE",
+      "UNEVEN"
+    ],
+    "chr16": [
+      "LOW_CALLABLE",
+      "UNEVEN"
+    ],
+    "chr17": [
+      "LOW_CALLABLE"
+    ],
+    "chr18": [
+      "CN_LOSS",
+      "LOW_CALLABLE"
+    ],
+    "chr19": [
+      "LOW_CALLABLE"
+    ],
+    "chr2": [
+      "LOW_CALLABLE"
+    ],
+    "chr20": [
+      "CN_GAIN",
+      "LOW_CALLABLE"
+    ],
+    "chr21": [
+      "LOW_CALLABLE",
+      "UNEVEN"
+    ],
+    "chr22": [
+      "LOW_CALLABLE",
+      "UNEVEN"
+    ],
+    "chr3": [
+      "CN_GAIN",
+      "LOW_CALLABLE"
+    ],
+    "chr4": [
+      "LOW_CALLABLE"
+    ],
+    "chr5": [
+      "CN_LOSS",
+      "LOW_CALLABLE"
+    ],
+    "chr6": [
+      "LOW_CALLABLE"
+    ],
+    "chr7": [
+      "CN_GAIN",
+      "LOW_CALLABLE"
+    ],
+    "chr8": [
+      "LOW_CALLABLE"
+    ],
+    "chr9": [
+      "LOW_CALLABLE",
+      "UNEVEN"
+    ],
+    "chrM": [
+      "EXTREME_DEPTH"
+    ],
+    "chrX": [
+      "LOW_DEPTH",
+      "LOW_CALLABLE"
+    ],
+    "chrY": [
+      "CN_DEPLETED",
+      "LOW_DEPTH",
+      "LOW_CALLABLE"
+    ]
+  },
+  "generated_utc": "2026-07-13T22:40:02.149125+00:00",
+  "schema": "chromcov.run/3",
+  "tool": {
+    "name": "parklab-chromcov",
+    "python": "3.13.9",
+    "version": "0.1.0"
+  }
+}

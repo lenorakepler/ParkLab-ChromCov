@@ -1,7 +1,27 @@
 # Project-specific
 /data/
-out/
 docs/dev/
+
+# Ignore everything under out/, but keep selected result files.
+# Note: each parent directory must be un-ignored before files inside it can be.
+out/*
+!out/qc_filtered/
+out/qc_filtered/*
+!out/qc_filtered/*.png
+!out/qc_filtered/*.html
+!out/qc_filtered/*.tsv
+!out/qc_filtered/*.json
+!out/defaults/
+out/defaults/*
+!out/defaults/*.png
+!out/defaults/*.html
+!out/defaults/*.tsv
+!out/defaults/*.json
+!out/mosdepth/
+!out/mosdepth/*.png
+!out/mosdepth/*.html
+!out/mosdepth/*.tsv
+!out/mosdepth/*.json
 
 # macOS
 .DS_Store
