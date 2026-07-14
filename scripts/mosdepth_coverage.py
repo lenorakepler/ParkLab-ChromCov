@@ -23,7 +23,8 @@ genuinely apples-to-apples: it reads the run's embedded Config and pulls the
 parameters that determine the numbers — reference/CRAM, min mapping quality,
 include/exclude flag masks, window size, ploidy, scatter CN cap — so mosdepth is
 invoked with the same filtering, and diffs against that run's coverage.tsv by
-default. Any explicit CLI flag still overrides the value from the run.
+default. Output lands in `<run>/mosdepth/` (beside the run it cross-checks) unless
+--outdir says otherwise. Any explicit CLI flag still overrides the value from the run.
 
 Plots are emitted by default (--no-plots to skip), reusing chromcov's own
 plotting code (chromcov.present.plots) so the figures line up with a chromcov
@@ -58,7 +59,6 @@ import shutil
 import statistics
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 # The add-on borrows the package's output format so the results are byte-comparable.
@@ -104,6 +104,7 @@ def load_run(path: str | Path) -> dict:
         # mosdepth --chrom restricts to a single contig only; a multi-contig subset
         # is left to run over all contigs (compare() only shows the overlap).
         "chrom": chroms[0] if chroms and len(chroms) == 1 else None,
+        "dir": str(sidecar.parent),
         "coverage_tsv": str(sidecar.parent / "coverage.tsv"),
     }
 
@@ -244,7 +245,8 @@ def main() -> None:
                          "10000) or a BED path; default: the run's `window`")
     ap.add_argument("--per-base", action="store_true", help="also split per-base tracks")
     ap.add_argument("--no-plots", action="store_true", help="skip the bar/scatter plots")
-    ap.add_argument("--outdir", default="out/mosdepth")
+    ap.add_argument("--outdir", default=None,
+                    help="where to write mosdepth's output (default: <run>/mosdepth, else out/mosdepth)")
     ap.add_argument("--compare", default=None,
                     help="a chromcov coverage.tsv to diff against (default: the run's)")
     args = ap.parse_args()
@@ -277,32 +279,37 @@ def main() -> None:
         print("[note] no window size (--by, or a run's `window`): bar chart only, no scatter.",
               file=sys.stderr)
 
-    outdir = Path(args.outdir).expanduser().resolve()
+    # Default beside the run (<run>/mosdepth) so mosdepth's native output sits next
+    # to the chromcov run it cross-checks; else out/mosdepth. An explicit --outdir
+    # wins. (Don't point it AT the run dir -- that would clobber coverage.tsv.)
+    default_outdir = f"{run['dir']}/mosdepth" if run.get("dir") else "out/mosdepth"
+    outdir = Path(args.outdir or default_outdir).expanduser().resolve()
     outdir.mkdir(parents=True, exist_ok=True)
 
-    with tempfile.TemporaryDirectory() as td:
-        prefix = Path(td) / "cov"
-        argv = build_argv(cram, reference, prefix, min_mapq=min_mapq,
-                          exclude_flags=exclude, include_flags=include, threads=args.threads,
-                          per_base=args.per_base, chrom=chrom, by=by)
-        print("[mosdepth] " + " ".join(argv), file=sys.stderr)
-        subprocess.run(argv, check=True)
+    # mosdepth writes its native files (summary, dist, per-base/regions beds) at this
+    # prefix; keep them in outdir rather than a tempdir so they're inspectable.
+    prefix = outdir / "cov"
+    argv = build_argv(cram, reference, prefix, min_mapq=min_mapq,
+                      exclude_flags=exclude, include_flags=include, threads=args.threads,
+                      per_base=args.per_base, chrom=chrom, by=by)
+    print("[mosdepth] " + " ".join(argv), file=sys.stderr)
+    subprocess.run(argv, check=True)
 
-        rows = parse_summary(prefix.with_suffix(".mosdepth.summary.txt"))
-        coverage_tsv = outdir / "coverage.tsv"
-        write_table(coverage_frame(rows), coverage_tsv)
-        print(f"wrote {coverage_tsv} ({len(rows)} chromosomes)", file=sys.stderr)
+    rows = parse_summary(prefix.with_suffix(".mosdepth.summary.txt"))
+    coverage_tsv = outdir / "coverage.tsv"
+    write_table(coverage_frame(rows), coverage_tsv)
+    print(f"wrote {coverage_tsv} ({len(rows)} chromosomes)", file=sys.stderr)
 
-        if args.per_base:
-            tracks = split_per_base(prefix.with_suffix(".per-base.bed.gz"), outdir)
-            print(f"wrote {len(tracks)} per-base tracks to {outdir}/", file=sys.stderr)
+    if args.per_base:
+        tracks = split_per_base(prefix.with_suffix(".per-base.bed.gz"), outdir)
+        print(f"wrote {len(tracks)} per-base tracks to {outdir}/", file=sys.stderr)
 
-        if want_plots:
-            windows = parse_regions(prefix.with_suffix(".regions.bed.gz")) if by else None
-            figs = make_plots(rows, windows, outdir, baseline=run.get("baseline"),
-                              ploidy=run.get("ploidy", 2), cap_cn=run.get("cap_cn", 6.0))
-            print(f"wrote {len(figs)} plot file(s): {', '.join(p.name for p in figs)}",
-                  file=sys.stderr)
+    if want_plots:
+        windows = parse_regions(prefix.with_suffix(".regions.bed.gz")) if by else None
+        figs = make_plots(rows, windows, outdir, baseline=run.get("baseline"),
+                          ploidy=run.get("ploidy", 2), cap_cn=run.get("cap_cn", 6.0))
+        print(f"wrote {len(figs)} plot file(s): {', '.join(p.name for p in figs)}",
+              file=sys.stderr)
 
     if compare_tsv and Path(compare_tsv).exists():
         compare(rows, Path(compare_tsv))
